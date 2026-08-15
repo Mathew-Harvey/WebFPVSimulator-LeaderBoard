@@ -69,10 +69,16 @@ async function testValidate() {
   check('rejects a symbol name', normaliseName('Ada!') == null);
   check('accepts a lap', normaliseLapMs(12345) === 12345);
   check('rejects a zero lap', normaliseLapMs(0) == null);
+  check('rejects a boolean lap', normaliseLapMs(true) == null);
+  check('rejects an array lap', normaliseLapMs([1234]) == null);
   const ok = inspectDocument(sampleDoc());
   check('accepts a schema 1 course', !ok.error && ok.id === 'trk-1a2b3c4d' && ok.gates === 1);
   check('refuses an empty flying order', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', { sequence: [] })).error));
+  check('refuses a flying order that names nothing', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', {
+    sequence: [{ id: 'seq-1', elementId: 'missing', apertureIndex: 0, entry: 1 }],
+  })).error));
   check('refuses a remote logo', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', { logo: 'https://evil.example/x.png' })).error));
+  check('refuses an svg logo', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', { logo: 'data:image/svg+xml;base64,PHN2Zy8+' })).error));
   const withLogo = inspectDocument(sampleDoc('trk-1a2b3c4d', { logo: 'data:image/png;base64,aaa' }));
   check('keeps an embedded logo', !withLogo.error && withLogo.hasLogo);
   const a = layoutHash(sampleDoc());
@@ -90,9 +96,20 @@ async function testStore() {
   const first = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
   check('first publish returns an edit key', Boolean(first.editKey) && first.updated === false);
   const clash = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
-  check('second publish without the key is refused', clash.status === 409);
+  check('second publish without the key is refused', clash.status === 409 && clash.conflict === true);
   const again = await store.publish({ inspected, author: 'Ada Rook', editKey: first.editKey });
   check('second publish with the key updates', again.updated === true && !again.editKey);
+  await store.addTime({ trackId: inspected.id, name: 'Ada Rook', lapMs: 42000 });
+  const renamed = inspectDocument(sampleDoc('trk-1a2b3c4d', { name: 'Renamed Loop' }));
+  const named = await store.publish({ inspected: renamed, author: 'Ada Rook', editKey: first.editKey });
+  check('a rename does not clear times', named.timesCleared === false);
+  const afterName = await store.getTrack(inspected.id);
+  check('the board shows the new name and keeps the time', afterName.name === 'Renamed Loop' && afterName.times.length === 1 && afterName.times[0].lapMs === 42000);
+  await store.addTime({ trackId: inspected.id, name: 'Bo', lapMs: 51000 });
+  const reauthor = await store.publish({ inspected: renamed, author: 'Ada Two', editKey: first.editKey });
+  check('an author rename does not clear times', reauthor.timesCleared === false);
+  const afterAuthor = await store.getTrack(inspected.id);
+  check('an author rename retitles their times and leaves others', afterAuthor.author === 'Ada Two' && afterAuthor.times[0].name === 'Ada Two' && afterAuthor.times[1].name === 'Bo');
   const moved = inspectDocument(sampleDoc('trk-1a2b3c4d', {
     elements: [{
       id: 'el-1',
@@ -105,7 +122,6 @@ async function testStore() {
       dims: { clearW: 1.524, clearH: 1.524, sillH: 0, levels: 1 },
     }],
   }));
-  await store.addTime({ trackId: inspected.id, name: 'Ada Rook', lapMs: 42000 });
   const cleared = await store.publish({ inspected: moved, author: 'Ada Rook', editKey: first.editKey });
   check('a layout change clears times', cleared.timesCleared === true);
   const after = await store.getTrack(inspected.id);
@@ -114,6 +130,12 @@ async function testStore() {
   check('a posted time is rank 1', posted.rank === 1);
   const slower = await store.addTime({ trackId: inspected.id, name: 'Bo', lapMs: 40000 });
   check('a slower time is rank 2', slower.rank === 2);
+  await Promise.all([
+    store.addTime({ trackId: inspected.id, name: 'Cy', lapMs: 45000 }),
+    store.addTime({ trackId: inspected.id, name: 'Di', lapMs: 46000 }),
+  ]);
+  const afterParallel = await store.getTrack(inspected.id);
+  check('parallel posts both land', afterParallel.times.length === 4);
   const list = await store.listTracks();
   check('the list names the author', list[0].author === 'Ada Rook' && list[0].best.lapMs === 33400);
   const doc = await store.getDocument(inspected.id);
@@ -170,12 +192,47 @@ async function testHttp() {
     });
     const posted = await time.json();
     check('post a time over HTTP', time.status === 201 && posted.rank === 1);
+    const renamed = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: { ...sampleDoc(), name: 'HTTP Rename' },
+        editKey: body.editKey,
+      }),
+    });
+    const renamedBody = await renamed.json();
+    check('rename over HTTP', renamed.status === 200 && renamedBody.updated === true && renamedBody.timesCleared !== true);
     const page = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d').then((r) => r.json());
-    check('expanded track has the time', page.times[0].lapMs === 29110);
+    check('expanded track has the new name and the time', page.name === 'HTTP Rename' && page.times[0].lapMs === 29110);
+    const reauthor = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Two',
+        document: { ...sampleDoc(), name: 'HTTP Rename' },
+        editKey: body.editKey,
+      }),
+    });
+    const reauthorBody = await reauthor.json();
+    check('author rename over HTTP', reauthor.status === 200 && reauthorBody.updated === true && reauthorBody.timesCleared !== true);
+    const renamedTimes = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d').then((r) => r.json());
+    check('author rename retitles the posted time', renamedTimes.author === 'Ada Two' && renamedTimes.times[0].name === 'Ada Two');
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
     check('the page is served', html.includes('The board') && html.includes('app.js'));
+    check('the page does not load a webfont', !html.includes('fonts.googleapis.com'));
+    const app = await fetch('http://127.0.0.1:3199/app.js').then((r) => r.text());
+    const cardFn = app.slice(app.indexOf('function cardFor('));
+    const attach = cardFn.indexOf('card.append(body)');
+    const paint = cardFn.indexOf('paintPodium(');
+    check('a course card is attached before its times are painted', attach !== -1 && paint !== -1 && attach < paint);
     const cfg = await fetch('http://127.0.0.1:3199/api/config').then((r) => r.json());
     check('config names the simulator', cfg.simOrigin === 'http://127.0.0.1:8000');
+    const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
+    const sneakText = await sneak.text();
+    check('encoded parent path cannot read the package', sneak.status !== 200 && !sneakText.includes('webfpvleaderboard'));
+    const badPct = await fetch('http://127.0.0.1:3199/%');
+    check('a malformed percent is not a 500', badPct.status === 400 || badPct.status === 404);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });

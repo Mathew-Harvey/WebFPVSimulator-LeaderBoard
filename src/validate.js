@@ -36,19 +36,20 @@ export function normaliseName(raw) {
 }
 
 export function normaliseLapMs(raw) {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 1 || n > MAX_LAP_MS) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 1 || raw > MAX_LAP_MS) {
     return null;
   }
-  return Math.round(n);
+  return Math.round(raw);
 }
 
 function isObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
+const LOGO_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
 function usableLogo(value) {
-  return typeof value === 'string' && value.startsWith('data:image/') && value.length < 280_000;
+  return typeof value === 'string' && value.length < 280_000 && LOGO_RE.test(value);
 }
 
 export function layoutHash(document) {
@@ -120,6 +121,17 @@ export function inspectDocument(raw) {
   }
   if (document.sequence.length < 1) {
     return { error: 'A published course needs at least one gate in the flying order.' };
+  }
+  const elementIds = new Set();
+  for (const el of document.elements) {
+    if (isObject(el) && typeof el.id === 'string' && el.id) {
+      elementIds.add(el.id);
+    }
+  }
+  for (const step of document.sequence) {
+    if (!isObject(step) || !elementIds.has(step.elementId)) {
+      return { error: 'That flying order names a gate that is not in the course.' };
+    }
   }
   const logo = document.branding && document.branding.logo;
   if (logo != null && !usableLogo(logo)) {

@@ -1,9 +1,20 @@
 /*
  * app.js: the public board page.
  *
- * Cards for every published course. Expanding a card fetches that course's
- * times. Fly this course opens the simulator with ?share=id, which is the
- * whole of the link between the two sites.
+ * One tile per published course, ordered by a control the reader can see
+ * and change. The tile art is the course plan, drawn from the list payload
+ * by plan.js, so the index costs two requests and no WebGL. Opening a
+ * course is a real link, #course=trk-1a2b3c4d, and the sheet behind it is
+ * where the expensive and beautiful thing lives: the simulator's own title
+ * camera, playing once rather than twelve times at once.
+ *
+ * Times are fetched only for courses that have any, which on a young board
+ * is one request instead of one per course. Those times then feed three
+ * things at no extra cost: the top three on a tile, the standings rail,
+ * and the count of pilots in the masthead.
+ *
+ * Fly this course opens the simulator with ?share=id, which is the whole
+ * of the link between the two sites.
  *
  * This file is part of WebFPVLeaderboard.
  *
@@ -11,7 +22,24 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or (at
  * your option) any later version.
+ *
+ * WebFPVLeaderboard is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with WebFPVLeaderboard. If not, see <https://www.gnu.org/licenses/>.
  */
+
+import { fillCredits } from './credits.js';
+import {
+  fieldSize, paintPlans, planCanvas, planLabel,
+} from './plan.js';
+
+/* ------------------------------------------------------------------ */
+/* Small helpers                                                       */
+/* ------------------------------------------------------------------ */
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -22,6 +50,10 @@ function el(tag, cls, text) {
     n.textContent = text;
   }
   return n;
+}
+
+function byId(id) {
+  return document.getElementById(id);
 }
 
 function formatTime(ms) {
@@ -37,6 +69,22 @@ function formatTime(ms) {
   return s.toFixed(2);
 }
 
+/* A lap, with the hundredths in their own span so they can sit a shade
+ * quieter than the seconds. */
+function timeNode(ms, cls, prefix) {
+  const node = el('span', cls || 'tm');
+  if (ms == null || !Number.isFinite(ms)) {
+    node.classList.add('empty');
+    node.textContent = '--.--';
+    return node;
+  }
+  const t = formatTime(ms);
+  const dot = t.lastIndexOf('.');
+  node.append(`${prefix || ''}${t.slice(0, dot)}`);
+  node.append(el('span', 'frac', t.slice(dot)));
+  return node;
+}
+
 function formatWhen(iso) {
   if (!iso) {
     return '';
@@ -45,202 +93,973 @@ function formatWhen(iso) {
   if (Number.isNaN(d.getTime())) {
     return '';
   }
-  return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function flyHref(simOrigin, boardOrigin, id) {
-  const board = encodeURIComponent(boardOrigin);
-  return `${simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
+function formatAgo(iso) {
+  if (!iso) {
+    return '';
+  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return '';
+  }
+  const sec = Math.round((Date.now() - d.getTime()) / 1000);
+  if (sec < 45) {
+    return 'just now';
+  }
+  if (sec < 90) {
+    return '1 min ago';
+  }
+  if (sec < 3600) {
+    return `${Math.floor(sec / 60)} min ago`;
+  }
+  if (sec < 5400) {
+    return '1 hour ago';
+  }
+  if (sec < 86400) {
+    return `${Math.floor(sec / 3600)} hours ago`;
+  }
+  if (sec < 172800) {
+    return '1 day ago';
+  }
+  if (sec < 86400 * 30) {
+    return `${Math.floor(sec / 86400)} days ago`;
+  }
+  return formatWhen(iso);
 }
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/* Facts on one line read as a list, not as a sentence, so they are
+ * separated by a middot rather than by punctuation. */
+function joined(parts) {
+  return parts.filter(Boolean).join(' \u00b7 ');
+}
+
+function reduceMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/* ------------------------------------------------------------------ */
+/* The two links between this site and the simulator                   */
+/* ------------------------------------------------------------------ */
+
+function flyHref(config, id) {
+  const board = encodeURIComponent(config.boardOrigin);
+  return `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
+}
+
+function remixHref(config, id) {
+  const board = encodeURIComponent(config.boardOrigin);
+  return `${config.simOrigin}/src/trackbuilder/index.html?share=${encodeURIComponent(id)}&board=${board}`;
+}
+
+function orbitHref(config, id) {
+  const u = new URL('/src/share/orbit.html', config.simOrigin);
+  u.searchParams.set('map', 'custom');
+  u.searchParams.set('share', id);
+  u.searchParams.set('board', config.boardOrigin);
+  return u.href;
+}
+
+function courseHref(id) {
+  return `#course=${encodeURIComponent(id)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* State                                                               */
+/* ------------------------------------------------------------------ */
+
+const state = {
+  config: { simOrigin: 'http://127.0.0.1:8000', boardOrigin: window.location.origin },
+  courses: [],
+  timesById: new Map(),
+  query: '',
+  sort: 'flown',
+  openId: null,
+  lastFocus: null,
+};
+
+function courseById(id) {
+  return state.courses.find((t) => t.id === id) || null;
+}
+
+function timesFor(id) {
+  return state.timesById.get(id) || null;
+}
+
+function bestMsOf(track) {
+  const times = timesFor(track.id);
+  if (times && times.length) {
+    return times[0].lapMs;
+  }
+  return track.best ? track.best.lapMs : null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Order and search                                                    */
+/* ------------------------------------------------------------------ */
 
 /*
- * A tiny plan of the field. Grass, a cream boundary, gates as amber
- * frames, start pads as mint chevrons. Enough to recognise a course
- * without building a world.
+ * Most flown is the default because a course with times on it is a course
+ * with something to beat. The tie break is gate count rather than the
+ * clock, so on a young board where almost nothing has been flown the
+ * championship layouts lead and a three gate drill does not.
  */
-function drawPlan(canvas, plan) {
-  const w = canvas.width;
-  const h = canvas.height;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#3d6a36';
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#4e7b3c';
-  for (let i = 0; i < 18; i += 1) {
-    const x = ((i * 47) % w);
-    const y = ((i * 29) % h);
-    ctx.fillRect(x, y, 18, 10);
-  }
-  if (!plan) {
-    return;
-  }
-  const pad = 10;
-  const sx = (plan.width > 0) ? (w - pad * 2) / plan.width : 1;
-  const sy = (plan.depth > 0) ? (h - pad * 2) / plan.depth : 1;
-  const s = Math.min(sx, sy);
-  const ox = (w - plan.width * s) / 2;
-  const oy = (h - plan.depth * s) / 2;
-  ctx.strokeStyle = '#dcd6ca';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(ox, oy, plan.width * s, plan.depth * s);
-  for (const mark of plan.marks || []) {
-    const x = ox + mark.x * s;
-    const y = oy + (plan.depth - mark.y) * s;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(-(mark.yaw || 0));
-    if (mark.type === 'startPads') {
-      ctx.fillStyle = '#7dffb4';
-      ctx.beginPath();
-      ctx.moveTo(0, -6);
-      ctx.lineTo(5, 5);
-      ctx.lineTo(-5, 5);
-      ctx.closePath();
-      ctx.fill();
-    } else if (mark.type === 'flag' || mark.type === 'cone') {
-      ctx.fillStyle = mark.type === 'flag' ? '#f7e8cd' : '#ffd45c';
-      ctx.beginPath();
-      ctx.arc(0, 0, 3.2, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (mark.type === 'barrier') {
-      ctx.fillStyle = '#dcd6ca';
-      ctx.fillRect(-10, -2, 20, 4);
-    } else {
-      ctx.strokeStyle = '#ffd45c';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-6, -5, 12, 10);
+const SORTS = {
+  flown: (a, b) => (b.times || 0) - (a.times || 0)
+    || (b.gates || 0) - (a.gates || 0)
+    || String(b.publishedUtc || '').localeCompare(String(a.publishedUtc || '')),
+  fastest: (a, b) => {
+    const x = bestMsOf(a);
+    const y = bestMsOf(b);
+    if (x == null && y == null) {
+      return (b.gates || 0) - (a.gates || 0);
     }
-    ctx.restore();
+    if (x == null) {
+      return 1;
+    }
+    if (y == null) {
+      return -1;
+    }
+    return x - y;
+  },
+  biggest: (a, b) => (b.gates || 0) - (a.gates || 0) || (b.times || 0) - (a.times || 0),
+  newest: (a, b) => String(b.publishedUtc || '').localeCompare(String(a.publishedUtc || '')),
+  name: (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }),
+};
+
+function matches(track, needle) {
+  if (!needle) {
+    return true;
   }
+  if (String(track.name).toLowerCase().includes(needle)) {
+    return true;
+  }
+  if (String(track.author).toLowerCase().includes(needle)) {
+    return true;
+  }
+  const times = timesFor(track.id);
+  return Boolean(times && times.some((row) => String(row.name).toLowerCase().includes(needle)));
 }
+
+function visibleCourses() {
+  const needle = state.query.trim().toLowerCase();
+  const compare = SORTS[state.sort] || SORTS.flown;
+  return state.courses.filter((t) => matches(t, needle)).sort(compare);
+}
+
+/* ------------------------------------------------------------------ */
+/* A course tile                                                       */
+/* ------------------------------------------------------------------ */
 
 function cardFor(track, config) {
   const card = el('article', 'card');
   card.dataset.id = track.id;
 
-  const bar = el('div', 'gate-bar');
-  bar.append(el('div', 'roundel', '1'));
-  card.append(bar);
+  const tile = el('a', 'tile');
+  tile.href = courseHref(track.id);
+  tile.setAttribute('aria-label', `${track.name}, plan and times`);
+  tile.append(planCanvas(track.plan, planLabel(track)));
+  const size = fieldSize(track);
+  if (size) {
+    tile.append(el('span', 'tile-chip', size));
+  }
+  if (track.times > 0) {
+    tile.append(el('span', 'tile-flown', plural(track.times, 'time', 'times')));
+  }
+  card.append(tile);
 
-  const head = el('div', 'card-head');
-  const canvas = document.createElement('canvas');
-  canvas.className = 'plan';
-  canvas.width = 240;
-  canvas.height = 160;
-  drawPlan(canvas, track.plan);
+  const body = el('div', 'body');
 
-  const meta = el('div', 'meta');
-  meta.append(el('h2', null, track.name));
+  const head = el('div', 'head');
+  head.append(el('h2', null, track.name));
   const by = el('p', 'by');
   by.append('by ');
-  const author = el('b', null, track.author);
-  by.append(author);
-  meta.append(by);
-  const chips = el('div', 'chips');
-  chips.append(el('span', 'chip', `${track.gates} gate${track.gates === 1 ? '' : 's'}`));
-  if (track.hasLogo) {
-    chips.append(el('span', 'chip', 'Logo on the flags'));
-  }
-  if (track.best) {
-    chips.append(el('span', 'chip best', `Best ${formatTime(track.best.lapMs)}  ${track.best.name}`));
-  } else {
-    chips.append(el('span', 'chip', 'No time yet'));
-  }
-  meta.append(chips);
+  by.append(el('b', null, track.author));
+  by.append(` \u00b7 ${plural(track.gates, 'gate', 'gates')}`);
+  head.append(by);
 
-  const actions = el('div', 'card-actions');
-  const fly = el('a', 'btn primary', 'Fly this course');
-  fly.href = flyHref(config.simOrigin, config.boardOrigin, track.id);
+  /* No record block on a course nobody has flown. Ten cards each carrying
+   * a label and a row of dashes is the difference between a board and a
+   * form. The single quiet line below says the same thing once. */
+  const record = el('div', 'record');
+  record.hidden = !track.best;
+  record.append(el('span', 'record-label', 'Record'));
+  record.append(timeNode(track.best ? track.best.lapMs : null, 'record-time'));
+  record.append(el('div', 'record-holder', track.best ? track.best.name : ''));
+  head.append(record);
+  body.append(head);
+
+  const podium = el('ol', 'podium');
+  podium.hidden = true;
+  body.append(podium);
+
+  const none = el('p', 'none', 'No time posted yet');
+  none.hidden = Boolean(track.best);
+  body.append(none);
+
+  const actions = el('div', 'actions');
+  const fly = el('a', 'btn primary small', 'Fly this course');
+  fly.href = flyHref(config, track.id);
   fly.target = '_blank';
   fly.rel = 'noopener';
-  fly.addEventListener('click', (e) => e.stopPropagation());
-  const more = el('button', 'btn', 'Leaderboard');
-  more.type = 'button';
+  fly.setAttribute('aria-label', `Fly ${track.name}, opens the simulator in a new tab`);
+  const more = el('a', 'text more');
+  more.href = courseHref(track.id);
+  more.textContent = track.times > 3 ? `All ${plural(track.times, 'time', 'times')}` : 'Course detail';
   actions.append(fly, more);
+  body.append(actions);
 
-  head.append(canvas, meta, actions);
-  card.append(head);
-
-  const board = el('div', 'board');
-  board.append(el('p', 'none', 'Open to load the times.'));
-  card.append(board);
-
-  const open = async () => {
-    const was = card.classList.contains('open');
-    document.querySelectorAll('.card.open').forEach((n) => n.classList.remove('open'));
-    if (was) {
-      more.textContent = 'Leaderboard';
-      return;
-    }
-    card.classList.add('open');
-    more.textContent = 'Close';
-    board.textContent = '';
-    board.append(el('p', 'none', 'Loading times.'));
-    try {
-      const detail = await fetch(`/api/tracks/${encodeURIComponent(track.id)}`).then((r) => r.json());
-      board.textContent = '';
-      if (!detail.times || !detail.times.length) {
-        board.append(el('p', 'none', 'No times yet. Fly the course and post one under your name.'));
-        return;
-      }
-      const table = document.createElement('table');
-      const headRow = document.createElement('tr');
-      for (const label of ['Rank', 'Name', 'Time', 'Posted']) {
-        headRow.append(el('th', null, label));
-      }
-      const thead = document.createElement('thead');
-      thead.append(headRow);
-      table.append(thead);
-      const body = document.createElement('tbody');
-      detail.times.forEach((row, i) => {
-        const tr = document.createElement('tr');
-        tr.append(el('td', 'rank', String(i + 1)));
-        tr.append(el('td', null, row.name));
-        tr.append(el('td', 'time', formatTime(row.lapMs)));
-        tr.append(el('td', 'when', formatWhen(row.postedUtc)));
-        body.append(tr);
-      });
-      table.append(body);
-      board.append(table);
-    } catch (e) {
-      board.textContent = '';
-      board.append(el('p', 'none', e.message || 'Could not load those times.'));
-    }
-  };
-
-  head.addEventListener('click', open);
-  more.addEventListener('click', (e) => {
-    e.stopPropagation();
-    open();
-  });
+  card.append(body);
   return card;
 }
 
-async function start() {
-  const host = document.getElementById('list');
+/*
+ * The top three, once a course's times have arrived. Called after the
+ * card is in the document, never while it is still a loose node: a card
+ * has to exist before anything paints into it.
+ */
+function paintPodium(card, times) {
+  const podium = card.querySelector('.podium');
+  const none = card.querySelector('.none');
+  const more = card.querySelector('.more');
+  const record = card.querySelector('.record');
+  const clock = card.querySelector('.record-time');
+  const holder = card.querySelector('.record-holder');
+  if (!podium || !none) {
+    return;
+  }
+  podium.textContent = '';
+  if (!times || !times.length) {
+    podium.hidden = true;
+    none.hidden = false;
+    if (record) {
+      record.hidden = true;
+    }
+    return;
+  }
+  none.hidden = true;
+  if (record) {
+    record.hidden = false;
+  }
+  if (clock) {
+    clock.replaceWith(timeNode(times[0].lapMs, 'record-time'));
+  }
+  /* One time is a record, not a podium, and naming the holder twice on
+   * one card is how a leaderboard starts to read as a receipt. The holder
+   * line carries the name when there is no podium, and the podium carries
+   * it when there is. */
+  const ranked = times.length > 1;
+  if (holder) {
+    holder.textContent = ranked ? '' : times[0].name;
+  }
+  podium.hidden = !ranked;
+  if (!ranked) {
+    return;
+  }
+  times.slice(0, 3).forEach((row, i) => {
+    const li = el('li', `podium-row r${i + 1}`);
+    li.append(el('span', 'rk', String(i + 1)));
+    li.append(el('span', 'nm', row.name));
+    li.append(timeNode(row.lapMs, 'tm'));
+    podium.append(li);
+  });
+  if (more) {
+    more.textContent = times.length > 3
+      ? `All ${plural(times.length, 'time', 'times')}`
+      : 'Course detail';
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* The grid                                                            */
+/* ------------------------------------------------------------------ */
+
+function skeletons(host, n) {
+  host.textContent = '';
+  for (let i = 0; i < n; i += 1) {
+    const card = el('article', 'card skeleton');
+    card.append(el('div', 'tile'));
+    const body = el('div', 'body');
+    body.append(el('div', 'bone wide'), el('div', 'bone thin'));
+    card.append(body);
+    host.append(card);
+  }
+}
+
+function paintGrid() {
+  const list = byId('list');
+  const notice = byId('notice');
+  const count = byId('count');
+  const shown = visibleCourses();
+  list.textContent = '';
+  notice.textContent = '';
+  for (const track of shown) {
+    const card = cardFor(track, state.config);
+    list.append(card);
+    const times = timesFor(track.id);
+    if (times) {
+      paintPodium(card, times);
+    }
+  }
+  paintPlans(list);
+  if (count) {
+    count.textContent = shown.length === state.courses.length
+      ? plural(state.courses.length, 'course', 'courses')
+      : `${shown.length} of ${plural(state.courses.length, 'course', 'courses')}`;
+  }
+  if (!shown.length && state.courses.length) {
+    const box = el('div', 'empty panel');
+    box.append(el('h2', null, 'Nothing matches that'));
+    box.append(el('p', null, `No course or pilot on the board answers to "${state.query.trim()}".`));
+    const clear = el('button', 'btn small', 'Clear the search');
+    clear.type = 'button';
+    clear.addEventListener('click', () => {
+      const find = byId('find');
+      state.query = '';
+      if (find) {
+        find.value = '';
+        find.focus();
+      }
+      paintGrid();
+    });
+    box.append(clear);
+    notice.append(box);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Standings                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A pilot's standing is how many courses they hold, not how many laps
+ * they have posted, because posting more laps is not the same as being
+ * quicker than anybody.
+ */
+function standings() {
+  const by = new Map();
+  for (const course of state.courses) {
+    const times = timesFor(course.id);
+    if (!times || !times.length) {
+      continue;
+    }
+    times.forEach((row, i) => {
+      const rec = by.get(row.name) || {
+        name: row.name, laps: 0, records: 0, podiums: 0,
+      };
+      rec.laps += 1;
+      if (i === 0) {
+        rec.records += 1;
+      }
+      if (i < 3) {
+        rec.podiums += 1;
+      }
+      by.set(row.name, rec);
+    });
+  }
+  return [...by.values()].sort((a, b) => b.records - a.records
+    || b.podiums - a.podiums
+    || b.laps - a.laps
+    || a.name.localeCompare(b.name));
+}
+
+function latestTimes(limit) {
+  const rows = [];
+  for (const course of state.courses) {
+    const times = timesFor(course.id);
+    if (!times) {
+      continue;
+    }
+    times.forEach((row, i) => {
+      rows.push({ ...row, course, best: i === 0 });
+    });
+  }
+  rows.sort((a, b) => String(b.postedUtc || '').localeCompare(String(a.postedUtc || '')));
+  return rows.slice(0, limit);
+}
+
+function railBlock(kicker, heading) {
+  const block = el('section', 'rail-block panel');
+  block.append(el('div', 'kicker', kicker));
+  block.append(el('h2', null, heading));
+  return block;
+}
+
+function paintRail() {
+  const rail = byId('rail');
+  const deck = byId('deck');
+  if (!rail || !deck) {
+    return;
+  }
+  const pilots = standings();
+  const feed = latestTimes(6);
+  rail.textContent = '';
+  if (!pilots.length) {
+    rail.hidden = true;
+    deck.classList.remove('has-rail');
+    return;
+  }
+  rail.hidden = false;
+  deck.classList.add('has-rail');
+
+  const table = railBlock('Standings', 'Fastest pilots');
+  pilots.slice(0, 8).forEach((p, i) => {
+    const row = el('div', `standing p${i + 1}`);
+    row.append(el('span', 'rk', String(i + 1)));
+    row.append(el('span', 'nm', p.name));
+    row.append(el('span', 'sc', String(p.records)));
+    row.append(el('span', 'mt', joined([
+      p.records === 1 ? 'record held' : 'records held',
+      p.laps > p.records ? plural(p.laps, 'lap', 'laps') : '',
+    ])));
+    table.append(row);
+  });
+  table.append(el('p', 'rail-note', 'Ranked by course records held, then podiums, then laps posted.'));
+  rail.append(table);
+
+  if (feed.length) {
+    const lately = railBlock('Lately', 'Times posted');
+    const list = el('div', 'feed');
+    for (const row of feed) {
+      const line = el('div', 'feed-row');
+      line.append(el('span', 'nm', row.name));
+      line.append(timeNode(row.lapMs, `rail-time${row.best ? ' best' : ''}`));
+      const on = el('a', 'on', row.course.name);
+      on.href = courseHref(row.course.id);
+      line.append(on);
+      line.append(el('span', 'ago', formatAgo(row.postedUtc)));
+      list.append(line);
+    }
+    lately.append(list);
+    rail.append(lately);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Counts                                                              */
+/* ------------------------------------------------------------------ */
+
+function paintStats() {
+  const n = state.courses.length;
+  const times = state.courses.reduce((sum, t) => sum + (t.times || 0), 0);
+  const pilots = standings().length;
+  const mast = byId('mast-stats');
+  const spine = byId('spine-stats');
+  if (mast) {
+    mast.hidden = !n;
+  }
+  const courseCell = byId('stat-courses');
+  const timeCell = byId('stat-times');
+  const pilotCell = byId('stat-pilots');
+  if (courseCell) {
+    courseCell.textContent = String(n);
+  }
+  if (timeCell) {
+    timeCell.textContent = String(times);
+  }
+  if (pilotCell) {
+    pilotCell.textContent = String(pilots);
+    pilotCell.parentElement.hidden = pilots === 0;
+  }
+  if (spine) {
+    spine.textContent = n
+      ? joined([
+        plural(n, 'course', 'courses'),
+        plural(times, 'time', 'times'),
+        pilots ? plural(pilots, 'pilot', 'pilots') : '',
+      ])
+      : '';
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Times, fetched only where there are any                             */
+/* ------------------------------------------------------------------ */
+
+const inflight = new Map();
+
+async function loadTimes(id) {
+  const held = state.timesById.get(id);
+  if (held) {
+    return held;
+  }
+  /* The sheet and the background fill can both want the same course, and
+   * a shared promise is cheaper than a second request. */
+  if (inflight.has(id)) {
+    return inflight.get(id);
+  }
+  const run = (async () => {
+    const res = await fetch(`/api/tracks/${encodeURIComponent(id)}`);
+    const detail = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(detail.error || 'Those times could not be loaded.');
+    }
+    const times = detail.times || [];
+    state.timesById.set(id, times);
+    return times;
+  })();
+  inflight.set(id, run);
   try {
-    const config = await fetch('/api/config').then((r) => r.json());
-    const sim = document.getElementById('sim-link');
-    const builder = document.getElementById('builder-link');
-    if (sim) {
-      sim.href = `${config.simOrigin}/`;
+    return await run;
+  } finally {
+    inflight.delete(id);
+  }
+}
+
+async function hydrate() {
+  const active = state.courses.filter((t) => (t.times || 0) > 0);
+  await Promise.all(active.map(async (track) => {
+    try {
+      const times = await loadTimes(track.id);
+      const card = document.querySelector(`.card[data-id="${CSS.escape(track.id)}"]`);
+      if (card) {
+        paintPodium(card, times);
+      }
+    } catch (e) {
+      /* The record from the list payload is still on the tile. */
     }
-    if (builder) {
-      builder.href = `${config.simOrigin}/src/trackbuilder/index.html`;
+  }));
+  paintRail();
+  paintStats();
+}
+
+/* ------------------------------------------------------------------ */
+/* The course sheet                                                    */
+/* ------------------------------------------------------------------ */
+
+/* Each pair goes in its own box, because a bare dt and dd in a grid flow
+ * as two separate cells and a label ends up above somebody else's value. */
+function factRow(list, label, value) {
+  if (value == null || value === '') {
+    return;
+  }
+  const cell = el('div');
+  cell.append(el('dt', null, label), el('dd', null, String(value)));
+  list.append(cell);
+}
+
+function paintShot(host, track) {
+  host.textContent = '';
+  host.append(planCanvas(track.plan, planLabel(track), { scaleBar: true, pad: 26 }));
+  if (reduceMotion()) {
+    return;
+  }
+  const frame = document.createElement('iframe');
+  frame.className = 'orbit';
+  frame.title = `${track.name}, a flight through the course`;
+  frame.tabIndex = -1;
+  frame.setAttribute('aria-hidden', 'true');
+  frame.src = orbitHref(state.config, track.id);
+  const wait = el('div', 'shot-wait');
+  wait.append(el('span', 'shot-dot'), el('span', null, 'Flying the course'));
+  host.append(wait, frame);
+}
+
+function paintBoard(host, track, times) {
+  host.textContent = '';
+  const head = el('div', 'board-head');
+  head.append(el('h3', null, times.length ? 'Every time posted' : 'The board is open'));
+  if (times.length) {
+    head.append(el('span', 'count', plural(times.length, 'lap', 'laps')));
+  }
+  host.append(head);
+
+  if (!times.length) {
+    host.append(el('p', 'none', `Nobody has posted a lap on ${track.name} yet. Fly it and the first time on the board is yours.`));
+    return;
+  }
+
+  const leader = times[0].lapMs;
+  const slowest = times[times.length - 1].lapMs || leader;
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const [cls, label] of [['rank', ''], ['nm', 'Pilot'], ['time', 'Time'], ['gap', 'Gap'], ['when', 'Posted']]) {
+    headRow.append(el('th', cls, label));
+  }
+  thead.append(headRow);
+  table.append(thead);
+
+  const body = document.createElement('tbody');
+  times.forEach((row, i) => {
+    const tr = el('tr', `r${i + 1}`);
+    tr.append(el('td', 'rank', String(i + 1)));
+
+    const name = el('td', 'nm');
+    name.append(el('span', null, row.name));
+    const bar = el('div', 'gap-bar');
+    const fill = el('span');
+    fill.style.width = `${Math.max(8, (row.lapMs / slowest) * 100)}%`;
+    bar.append(fill);
+    name.append(bar);
+    tr.append(name);
+
+    const time = el('td', 'time');
+    time.append(timeNode(row.lapMs, 'tm'));
+    tr.append(time);
+
+    const gap = el('td', 'gap');
+    if (i > 0) {
+      gap.append(timeNode(row.lapMs - leader, 'tm', '+'));
     }
-    const payload = await fetch('/api/tracks').then((r) => r.json());
-    const tracks = payload.tracks || [];
-    host.textContent = '';
-    if (!tracks.length) {
-      host.append(el('div', 'empty', 'No courses on the board yet. Open the track builder, place a flying order, and press Publish. The copy that lands here includes the logo on the gates and flags.'));
+    tr.append(gap);
+
+    const when = el('td', 'when', formatAgo(row.postedUtc));
+    when.title = formatWhen(row.postedUtc);
+    tr.append(when);
+    body.append(tr);
+  });
+  table.append(body);
+  host.append(table);
+}
+
+function paintHero(host, track, times) {
+  host.textContent = '';
+  const best = times.length ? times[0] : track.best;
+  /* An empty hero is a row of dashes the size of a headline, so a course
+   * with no record does not get one. The board below says it in words. */
+  host.hidden = !best;
+  if (!best) {
+    return;
+  }
+  host.append(el('span', 'record-label', 'Course record'));
+  host.append(timeNode(best.lapMs, 'record-time'));
+  host.append(el('div', 'record-holder', best.name));
+}
+
+function copyButton(url) {
+  const btn = el('button', 'text', 'Copy link');
+  btn.type = 'button';
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      btn.textContent = 'Link copied';
+    } catch (e) {
+      btn.textContent = url;
+    }
+    setTimeout(() => {
+      btn.textContent = 'Copy link';
+    }, 2200);
+  });
+  return btn;
+}
+
+async function paintSheet(track) {
+  byId('sheet-kicker').textContent = track.times > 0
+    ? `${plural(track.times, 'time', 'times')} posted`
+    : 'Open course';
+  byId('sheet-title').textContent = track.name;
+  const by = byId('sheet-by');
+  by.textContent = '';
+  by.append('Built by ');
+  by.append(el('b', null, track.author));
+  const published = formatWhen(track.publishedUtc);
+  by.append(published ? `. Published ${published}.` : '.');
+
+  paintShot(byId('sheet-shot'), track);
+
+  const facts = byId('sheet-facts');
+  facts.textContent = '';
+  factRow(facts, 'Gates', plural(track.gates, 'gate', 'gates'));
+  factRow(facts, 'Elements', track.elements);
+  factRow(facts, 'Field', fieldSize(track));
+  factRow(facts, 'Updated', formatAgo(track.updatedUtc));
+  if (track.hasLogo) {
+    factRow(facts, 'Branding', 'Sponsor print');
+  }
+
+  const actions = byId('sheet-actions');
+  actions.textContent = '';
+  const fly = el('a', 'btn primary', 'Fly this course');
+  fly.href = flyHref(state.config, track.id);
+  fly.target = '_blank';
+  fly.rel = 'noopener';
+  const remix = el('a', 'text', 'Remix in the builder');
+  remix.href = remixHref(state.config, track.id);
+  remix.target = '_blank';
+  remix.rel = 'noopener';
+  actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${courseHref(track.id)}`));
+
+  const held = timesFor(track.id) || [];
+  paintHero(byId('sheet-hero'), track, held);
+  paintBoard(byId('sheet-board'), track, held);
+  paintPlans(byId('sheet'));
+
+  if (!timesFor(track.id) && (track.times || 0) > 0) {
+    try {
+      const times = await loadTimes(track.id);
+      if (state.openId === track.id) {
+        paintHero(byId('sheet-hero'), track, times);
+        paintBoard(byId('sheet-board'), track, times);
+      }
+    } catch (e) {
+      byId('sheet-board').append(el('p', 'none', e.message));
+    }
+  }
+}
+
+/* The page behind an open sheet is inert, so tabbing cannot walk out of
+ * the dialog into a grid nobody can see. */
+function setPageInert(on) {
+  for (const node of [document.querySelector('.mast'), document.querySelector('.spine'), byId('courses'), document.querySelector('footer')]) {
+    if (node) {
+      node.inert = on;
+    }
+  }
+}
+
+function sheetOpen() {
+  return !byId('sheet').hidden || !byId('credits-sheet').hidden;
+}
+
+function closeSheets() {
+  for (const id of ['sheet', 'credits-sheet']) {
+    const node = byId(id);
+    if (!node.hidden) {
+      node.hidden = true;
+    }
+  }
+  /* Stop the simulator that was running inside the sheet. */
+  const shot = byId('sheet-shot');
+  if (shot) {
+    shot.textContent = '';
+  }
+  state.openId = null;
+  document.body.classList.remove('locked');
+  setPageInert(false);
+}
+
+function openSheet(node) {
+  if (!sheetOpen()) {
+    state.lastFocus = document.activeElement;
+  }
+  closeSheets();
+  node.hidden = false;
+  node.scrollTop = 0;
+  document.body.classList.add('locked');
+  setPageInert(true);
+  const close = node.querySelector('.btn');
+  if (close) {
+    close.focus();
+  }
+}
+
+function clearHash() {
+  const back = state.lastFocus;
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  route();
+  if (back && document.contains(back)) {
+    back.focus();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Routing. A course is an address, so it can be linked and shared.    */
+/* ------------------------------------------------------------------ */
+
+function route() {
+  const hash = location.hash;
+  if (hash === '#credits') {
+    openSheet(byId('credits-sheet'));
+    return;
+  }
+  const found = hash.match(/^#course=(.+)$/);
+  if (found) {
+    let id = '';
+    try {
+      id = decodeURIComponent(found[1]);
+    } catch (e) {
+      id = found[1];
+    }
+    const track = courseById(id);
+    if (!track) {
+      closeSheets();
       return;
     }
-    for (const track of tracks) {
-      host.append(cardFor(track, config));
-    }
-  } catch (e) {
-    host.textContent = '';
-    host.append(el('div', 'status', e.message || 'The board could not be loaded.'));
+    openSheet(byId('sheet'));
+    state.openId = id;
+    paintSheet(track);
+    return;
   }
+  closeSheets();
+}
+
+/* ------------------------------------------------------------------ */
+/* Page furniture                                                      */
+/* ------------------------------------------------------------------ */
+
+function watchSpine() {
+  const mast = document.querySelector('.mast');
+  const spine = document.querySelector('.spine');
+  if (!mast || !spine) {
+    return;
+  }
+  const io = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      spine.classList.toggle('on', !entry.isIntersecting);
+    }
+  }, { threshold: 0 });
+  io.observe(mast);
+}
+
+function bindLinks(config) {
+  const sim = `${config.simOrigin}/`;
+  const builder = `${config.simOrigin}/src/trackbuilder/index.html`;
+  const set = (id, href) => {
+    const n = byId(id);
+    if (n) {
+      n.href = href;
+    }
+  };
+  set('sim-link', sim);
+  set('foot-sim', sim);
+  set('builder-link', builder);
+  set('spine-build', builder);
+}
+
+function bindToolbar() {
+  const find = byId('find');
+  const sort = byId('sort');
+  if (find) {
+    find.addEventListener('input', () => {
+      state.query = find.value;
+      paintGrid();
+    });
+    find.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && find.value) {
+        e.stopPropagation();
+        find.value = '';
+        state.query = '';
+        paintGrid();
+      }
+    });
+  }
+  if (sort) {
+    sort.value = state.sort;
+    sort.addEventListener('change', () => {
+      state.sort = sort.value;
+      paintGrid();
+    });
+  }
+}
+
+function bindCredits() {
+  const roll = byId('credits-roll');
+  if (roll) {
+    fillCredits(roll, { assetBase: 'credits' });
+  }
+  for (const id of ['credits-close', 'sheet-close']) {
+    const btn = byId(id);
+    if (btn) {
+      btn.addEventListener('click', clearHash);
+    }
+  }
+}
+
+/* A card's iframe says when its first frame is up, so the plan underneath
+ * can hand over rather than cut. */
+function watchOrbit() {
+  window.addEventListener('message', (e) => {
+    if (!e.data || e.data.type !== 'webfpv-orbit-ready') {
+      return;
+    }
+    for (const frame of document.querySelectorAll('iframe.orbit')) {
+      if (frame.contentWindow !== e.source) {
+        continue;
+      }
+      frame.classList.add('ready');
+      const wait = frame.parentElement && frame.parentElement.querySelector('.shot-wait');
+      if (wait) {
+        wait.hidden = true;
+      }
+    }
+  });
+}
+
+function watchKeys() {
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (location.hash) {
+        clearHash();
+      }
+      return;
+    }
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || sheetOpen()) {
+        return;
+      }
+      const find = byId('find');
+      if (find && !find.closest('[hidden]')) {
+        e.preventDefault();
+        find.focus();
+        find.select();
+      }
+    }
+  });
+}
+
+function watchResize() {
+  let timer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => paintPlans(document), 140);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Boot                                                                */
+/* ------------------------------------------------------------------ */
+
+async function start() {
+  watchSpine();
+  watchOrbit();
+  watchKeys();
+  watchResize();
+  bindCredits();
+  window.addEventListener('hashchange', route);
+  if (location.hash === '#credits') {
+    route();
+  }
+
+  const list = byId('list');
+  const notice = byId('notice');
+  skeletons(list, 6);
+
+  try {
+    state.config = await fetch('/api/config').then((r) => r.json());
+    bindLinks(state.config);
+    const payload = await fetch('/api/tracks').then((r) => r.json());
+    state.courses = payload.tracks || [];
+  } catch (e) {
+    list.textContent = '';
+    notice.append(el('div', 'status panel', e.message || 'The board could not be loaded.'));
+    return;
+  }
+
+  paintStats();
+  if (!state.courses.length) {
+    list.textContent = '';
+    const box = el('div', 'empty panel');
+    box.append(el('h2', null, 'The board is empty'));
+    box.append(el('p', null, 'Build a course in the track builder, set a flying order, and publish it. The board starts when the first course lands.'));
+    const build = el('a', 'btn primary', 'Build a course');
+    build.href = `${state.config.simOrigin}/src/trackbuilder/index.html`;
+    box.append(build);
+    notice.append(box);
+    return;
+  }
+
+  byId('toolbar').hidden = false;
+  bindToolbar();
+  paintGrid();
+  route();
+  await hydrate();
 }
 
 start();

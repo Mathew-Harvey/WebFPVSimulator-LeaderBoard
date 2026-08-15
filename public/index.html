@@ -2,9 +2,16 @@
 <!--
   The public board. Every published course, and the times flown on it.
 
-  Colour rule, the same one the simulator follows: light is warm, shadow is
-  cool. Cream and amber for lit type, slate blue for recessed type, mint
-  for a record. Nothing here is a grey copy of itself.
+  Same chrome as the simulator: system fonts, cream for lit type, sakura
+  for chrome, mint for a record, amber for instruments, cool mist for
+  recessed type. A forest page, not a second landscape. The chequer stays
+  as a racing border.
+
+  Card art is the course plan, drawn from the field and the marks the list
+  payload already carries, in the track builder's blueprint palette. The
+  simulator's own orbit camera is the expensive and beautiful thing, so it
+  plays once, large, in the course sheet, rather than twelve times at once
+  in the grid.
 
   This file is part of WebFPVLeaderboard.
 
@@ -18,23 +25,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>The Board, WebFPV</title>
+    <meta name="description" content="Every published WebFPV course, and the lap times flown on it." />
     <link rel="icon" href="data:," />
     <style>
+      /* ---------------------------------------------------------------
+         Tokens. The simulator's palette, unchanged, plus one cool plate
+         for the plan drawings so a course plan reads as a drawing and
+         not as a second landscape.
+         --------------------------------------------------------------- */
       :root {
-        --cream: #f7e8cd;
+        --cream: #f3ead4;
+        --sakura: #e8a8b8;
         --amber: #ffd45c;
         --mint: #7dffb4;
         --slate: #9db3c8;
-        --dim: #7f95ab;
-        --deep: #101a26;
-        --panel: #142230;
-        --panel-2: #0d151e;
-        --vinyl: #dcd6ca;
-        --navy: #1e3566;
-        --red: #b8332c;
-        --line: rgba(157, 179, 200, 0.18);
-        --ui-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+        --dim: #8a9a86;
+        --deep: #141c16;
+        --panel: rgba(16, 22, 17, 0.86);
+        --sunk: rgba(11, 16, 12, 0.55);
+        --line: rgba(244, 236, 214, 0.12);
+        --edge: rgba(232, 168, 184, 0.28);
+        --field: #121a14;
+        --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --page: min(1240px, 94vw);
+        --radius: 4px;
       }
 
       * { box-sizing: border-box; }
@@ -44,60 +59,72 @@
         min-height: 100%;
         background: var(--deep);
         color: var(--cream);
-        font-family: var(--ui-font);
-        font-variant-numeric: tabular-nums;
+        font-family: var(--ui);
+        font-variant-numeric: tabular-nums lining-nums;
+        -webkit-font-smoothing: antialiased;
       }
 
       body {
-        background:
-          radial-gradient(120% 70% at 50% 110%, rgba(247, 232, 205, 0.16), transparent 46%),
-          radial-gradient(90% 60% at 80% 0%, rgba(30, 53, 102, 0.55), transparent 50%),
-          linear-gradient(180deg, #16222f 0%, #101a26 42%, #0a1119 100%);
+        background: radial-gradient(120% 90% at 50% 6%, #1e2a20, #101610 60%) fixed;
         min-height: 100vh;
       }
 
+      body.locked { overflow: hidden; }
+
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 2px solid var(--sakura);
+        outline-offset: 3px;
+        border-radius: 2px;
+      }
+
+      .skip {
+        position: absolute;
+        left: 12px;
+        top: -48px;
+        z-index: 60;
+        padding: 8px 12px;
+        background: var(--mint);
+        color: var(--deep);
+        font: 600 13px/1 var(--ui);
+        text-decoration: none;
+        border-radius: 3px;
+      }
+      .skip:focus { top: 12px; }
+
       .chequer {
-        height: 10px;
-        background:
-          repeating-linear-gradient(
-            90deg,
-            #23272f 0 10px,
-            #eae6dd 10px 20px
-          );
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 0 rgba(0, 0, 0, 0.45);
+        height: 8px;
+        background: repeating-linear-gradient(90deg, #23272f 0 14px, #eae6dd 14px 28px);
       }
 
-      header {
-        padding: 28px 8vw 18px;
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-        gap: 24px;
-        flex-wrap: wrap;
-      }
-
-      .brand h1 {
-        margin: 0;
-        font-size: clamp(40px, 7vw, 84px);
-        font-weight: 800;
-        letter-spacing: 0.14em;
-        padding-left: 0.14em;
-        line-height: 0.92;
-        text-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
-      }
-
-      .brand .sub {
-        margin-top: 10px;
-        font-size: 13px;
-        letter-spacing: 0.28em;
+      /* ---------------------------------------------------------------
+         Shared chrome: kickers, rules, buttons, panels.
+         --------------------------------------------------------------- */
+      .kicker {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
-        color: var(--amber);
+        color: var(--sakura);
       }
 
-      .links {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
+      .rule-after::after {
+        content: "";
+        display: block;
+        width: 36px;
+        height: 2px;
+        background: var(--sakura);
+        margin-top: 10px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border-radius: var(--radius);
+        border-top: 2px solid var(--edge);
+        box-shadow: inset 0 0 0 1px var(--line);
       }
 
       a.btn, button.btn {
@@ -106,216 +133,1109 @@
         align-items: center;
         justify-content: center;
         gap: 8px;
-        padding: 8px 14px;
-        border-radius: 6px;
+        padding: 9px 16px;
+        border-radius: 3px;
         border: 1px solid var(--line);
-        background: var(--panel);
+        background: transparent;
         color: var(--slate);
-        font: inherit;
-        font-size: 13px;
+        font: 600 13px/1.2 var(--ui);
+        letter-spacing: 0.04em;
         text-decoration: none;
         cursor: pointer;
+        transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
       }
-      a.btn:hover, button.btn:hover { color: var(--cream); border-color: rgba(255, 212, 92, 0.5); }
+      a.btn:hover, button.btn:hover {
+        color: var(--cream);
+        border-color: rgba(232, 168, 184, 0.55);
+        background: rgba(232, 168, 184, 0.06);
+      }
       a.btn.primary, button.btn.primary {
         background: var(--mint);
         border-color: var(--mint);
         color: var(--deep);
         font-weight: 700;
       }
-      a.btn.primary:hover, button.btn.primary:hover { filter: brightness(1.05); color: var(--deep); }
+      a.btn.primary:hover, button.btn.primary:hover {
+        filter: brightness(1.06);
+        color: var(--deep);
+        background: var(--mint);
+      }
+      a.btn.small, button.btn.small { padding: 7px 13px; font-size: 12px; }
 
-      .intro {
-        max-width: 40em;
-        margin: 8px 8vw 28px;
+      a.text, button.text {
+        appearance: none;
+        background: none;
+        border: 0;
+        padding: 0;
         color: var(--slate);
-        font-size: 16px;
+        font: 600 13px/1.3 var(--ui);
+        letter-spacing: 0.03em;
+        text-decoration: none;
+        cursor: pointer;
+        transition: color 120ms ease;
+      }
+      a.text:hover, button.text:hover { color: var(--sakura); }
+
+      /* Times. Mono, tabular, with the hundredths a shade quieter so the
+         seconds are what the eye lands on. */
+      .tm, .record-time, .rail-time { font-family: var(--mono); }
+      .frac { font-size: 0.70em; opacity: 0.80; }
+
+      /* ---------------------------------------------------------------
+         Masthead.
+         --------------------------------------------------------------- */
+      .mast {
+        width: var(--page);
+        margin: 0 auto;
+        padding: 30px 0 24px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 22px 48px;
+        align-items: end;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: clamp(38px, 6.4vw, 68px);
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        line-height: 0.92;
+        text-shadow: 3px 3px 0 rgba(20, 28, 20, 0.82);
+      }
+      .brand h1 .fpv { color: var(--sakura); }
+
+      .eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 14px 0 0;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: #d8d2c0;
+      }
+      .eyebrow::before {
+        content: "";
+        width: 36px;
+        height: 2px;
+        background: var(--sakura);
+        flex: 0 0 auto;
+      }
+
+      .invite {
+        margin: 12px 0 0;
+        max-width: 34em;
+        color: var(--slate);
+        font-size: 15px;
         line-height: 1.6;
       }
-      .intro strong { color: var(--cream); font-weight: 650; }
 
-      main {
-        width: min(980px, 92vw);
-        margin: 0 auto 80px;
+      .mast-side {
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        align-items: flex-end;
+        gap: 18px;
       }
 
-      .empty, .status {
-        padding: 28px 24px;
-        background: rgba(20, 34, 48, 0.72);
-        border-radius: 10px;
-        box-shadow: inset 0 0 0 1px var(--line);
-        color: var(--slate);
-        line-height: 1.55;
-      }
-      .status { text-align: center; }
-
-      .card {
-        background: var(--panel);
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow:
-          inset 0 0 0 1px rgba(157, 179, 200, 0.16),
-          0 16px 34px rgba(0, 0, 0, 0.38);
-      }
-      .card.open {
-        box-shadow:
-          inset 0 0 0 1px rgba(255, 212, 92, 0.42),
-          0 18px 40px rgba(0, 0, 0, 0.5);
-      }
-
-      .gate-bar {
-        height: 18px;
-        background: var(--vinyl);
-        position: relative;
+      .stats {
         display: flex;
-        align-items: stretch;
+        gap: 30px;
+        margin: 0;
       }
-      .gate-bar::after {
-        content: "";
-        position: absolute;
-        left: 0; right: 0; bottom: 0;
-        height: 5px;
-        background:
-          repeating-linear-gradient(
-            90deg,
-            #23272f 0 7px,
-            #eae6dd 7px 14px
-          );
-      }
-      .roundel {
-        width: 18px;
-        background: #c7c0b3;
-        color: #1a1f2b;
+      .stats div { text-align: right; }
+      .stats dt {
+        color: var(--sakura);
         font-size: 10px;
-        font-weight: 800;
-        display: grid;
-        place-items: center;
-        letter-spacing: 0;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+      .stats dd {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: 28px;
+        font-weight: 600;
+        line-height: 1;
+        color: var(--cream);
       }
 
-      .card-head {
-        display: grid;
-        grid-template-columns: 168px 1fr auto;
+      .links {
+        display: flex;
         gap: 16px;
-        padding: 14px 16px 16px;
-        cursor: pointer;
+        flex-wrap: wrap;
         align-items: center;
       }
+
+      @media (max-width: 860px) {
+        .mast { grid-template-columns: 1fr; padding: 18px 0 14px; gap: 16px; }
+        .brand h1 { font-size: clamp(30px, 9vw, 44px); }
+        .invite { margin-top: 10px; font-size: 14px; }
+        .mast-side { align-items: flex-start; gap: 14px; }
+        .stats div { text-align: left; }
+      }
+
+      /* ---------------------------------------------------------------
+         Sticky spine. Takes over from the masthead on scroll and carries
+         the search field with it, because finding a course is the thing
+         you want halfway down a long board.
+         --------------------------------------------------------------- */
+      .spine {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 30;
+        background: rgba(14, 20, 15, 0.94);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line);
+        transform: translateY(-100%);
+        opacity: 0;
+        pointer-events: none;
+        transition: transform 180ms ease, opacity 180ms ease;
+      }
+      .spine.on { transform: none; opacity: 1; pointer-events: auto; }
+      .spine-inner {
+        width: var(--page);
+        margin: 0 auto;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+      }
+      .spine-mark {
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        flex: 0 0 auto;
+      }
+      .spine-mark .fpv { color: var(--sakura); }
+      .spine-stats {
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spine .links { margin-left: auto; }
       @media (max-width: 720px) {
-        .card-head { grid-template-columns: 120px 1fr; }
-        .card-actions { grid-column: 1 / -1; justify-content: flex-start; }
+        .spine-stats { display: none; }
       }
 
-      .plan {
+      /* ---------------------------------------------------------------
+         Layout. Courses on the left, standings on the right once there
+         is a screen wide enough and a time worth ranking.
+         --------------------------------------------------------------- */
+      main {
+        width: var(--page);
+        margin: 8px auto 72px;
+      }
+
+      .deck {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 26px;
+        align-items: start;
+      }
+      @media (min-width: 1080px) {
+        .deck.has-rail { grid-template-columns: minmax(0, 1fr) 296px; gap: 30px; }
+      }
+
+      /* ---------------------------------------------------------------
+         Toolbar. Search, sort, and an honest count.
+         --------------------------------------------------------------- */
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 16px;
+        padding: 0 0 16px;
+        margin-bottom: 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      .toolbar[hidden] { display: none; }
+
+      .find {
+        position: relative;
+        flex: 1 1 220px;
+        max-width: 340px;
+        display: flex;
+        align-items: center;
+      }
+      .find svg {
+        position: absolute;
+        left: 11px;
+        width: 15px;
+        height: 15px;
+        color: var(--dim);
+        pointer-events: none;
+      }
+      .find input {
         width: 100%;
-        aspect-ratio: 3 / 2;
-        display: block;
-        border-radius: 6px;
-        background: #3d6a36;
-        box-shadow: inset 0 0 0 1px rgba(8, 13, 20, 0.35);
+        padding: 9px 11px 9px 34px;
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        color: var(--cream);
+        font: 400 14px/1.2 var(--ui);
+      }
+      .find input::placeholder { color: var(--dim); }
+      .find input:focus { outline: none; border-color: var(--sakura); }
+      .find kbd {
+        position: absolute;
+        right: 9px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        border: 1px solid rgba(235, 230, 215, 0.24);
+        background: rgba(20, 28, 22, 0.6);
+        color: var(--dim);
+        font: 650 10px/1.2 var(--ui);
+        pointer-events: none;
+      }
+      .find input:focus ~ kbd, .find input:not(:placeholder-shown) ~ kbd { opacity: 0; }
+
+      .sort {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .sort label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .sort select {
+        appearance: none;
+        padding: 8px 30px 8px 11px;
+        background-color: var(--field);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23e8a8b8'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 11px center;
+        background-size: 9px 6px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        color: var(--sakura);
+        font: 600 13px/1.2 var(--ui);
+        cursor: pointer;
+      }
+      .sort select:focus { outline: none; border-color: var(--sakura); }
+      .sort select option { background: #101610; color: var(--cream); }
+
+      .count {
+        margin-left: auto;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        color: var(--dim);
       }
 
-      .meta h2 {
-        margin: 0 0 6px;
-        font-size: 22px;
+      /* ---------------------------------------------------------------
+         The grid of courses.
+         --------------------------------------------------------------- */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
+        gap: 22px;
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        background: var(--panel);
+        border-radius: var(--radius);
+        overflow: hidden;
+        border-top: 2px solid var(--edge);
+        box-shadow: inset 0 0 0 1px var(--line), 0 14px 30px rgba(0, 0, 0, 0.34);
+        transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+      }
+      .card:hover, .card:focus-within {
+        transform: translateY(-3px);
+        border-top-color: var(--sakura);
+        box-shadow: inset 0 0 0 1px rgba(232, 168, 184, 0.32), 0 18px 36px rgba(0, 0, 0, 0.48);
+      }
+
+      .tile {
+        position: relative;
+        display: block;
+        aspect-ratio: 16 / 10;
+        background: #0b1219;
+        border-bottom: 1px solid var(--line);
+      }
+      .tile canvas.plan {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .tile-chip {
+        position: absolute;
+        right: 9px;
+        bottom: 9px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background: rgba(11, 16, 12, 0.78);
+        box-shadow: inset 0 0 0 1px rgba(157, 179, 200, 0.28);
+        color: var(--slate);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .tile-flown {
+        position: absolute;
+        left: 9px;
+        top: 9px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background: rgba(11, 16, 12, 0.78);
+        box-shadow: inset 0 0 0 1px rgba(125, 255, 180, 0.4);
+        color: var(--mint);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .body {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        gap: 12px;
+        padding: 15px 16px 16px;
+      }
+
+      .head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 4px 14px;
+        align-items: baseline;
+      }
+      .head h2 {
+        grid-column: 1;
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .by {
+        grid-column: 1;
+        margin: 0;
+        color: var(--dim);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+      .by b { color: var(--sakura); font-weight: 600; }
+
+      .record {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        text-align: right;
+        align-self: start;
+      }
+      .record[hidden] { display: none; }
+      .record-label {
+        display: block;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+        margin-bottom: 3px;
+      }
+      .record-time {
+        display: block;
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--mint);
+        line-height: 1;
+      }
+      .record-time.empty { color: #55654f; font-weight: 500; font-size: 19px; }
+      .record-holder {
+        margin-top: 4px;
+        color: var(--slate);
+        font-size: 12px;
+      }
+      .record-holder:empty { display: none; }
+
+      /* Top three, once a course has been flown. */
+      .podium {
+        margin: 0;
+        padding: 4px 10px;
+        list-style: none;
+        background: var(--sunk);
+        border-radius: 3px;
+        box-shadow: inset 0 0 0 1px var(--line);
+      }
+      .podium[hidden] { display: none; }
+      .podium-row {
+        display: grid;
+        grid-template-columns: 1.5em minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: baseline;
+        padding: 6px 0;
+        font-size: 14px;
+      }
+      .podium-row + .podium-row { border-top: 1px solid var(--line); }
+      .podium-row .rk {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--dim);
+      }
+      .podium-row .nm {
+        color: var(--cream);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .podium-row .tm { color: var(--cream); font-size: 13px; }
+      .podium-row.r1 .rk, .podium-row.r1 .tm { color: var(--mint); }
+      .podium-row.r2 .rk, .podium-row.r3 .rk { color: var(--sakura); }
+
+      .none {
+        margin: 0;
+        color: var(--dim);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .none[hidden] { display: none; }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: center;
+        margin-top: auto;
+        padding-top: 2px;
+      }
+
+      /* ---------------------------------------------------------------
+         The standings rail. Who is fast, and what happened lately.
+         --------------------------------------------------------------- */
+      .rail {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        position: sticky;
+        top: 68px;
+      }
+      .rail[hidden] { display: none; }
+      @media (max-width: 1079px) {
+        .rail { position: static; }
+      }
+
+      .rail-block { padding: 16px 16px 18px; }
+      .rail-block h2 {
+        margin: 8px 0 14px;
+        font-size: 16px;
         font-weight: 700;
         letter-spacing: 0.02em;
       }
-      .by {
-        margin: 0 0 10px;
-        color: var(--slate);
+      .rail-note {
+        margin: 0;
+        color: var(--dim);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .standing {
+        display: grid;
+        grid-template-columns: 1.6em minmax(0, 1fr) auto;
+        gap: 4px 10px;
+        align-items: baseline;
+        padding: 9px 0;
+      }
+      .standing + .standing { border-top: 1px solid var(--line); }
+      .standing .rk {
+        grid-row: 1 / span 2;
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--dim);
+      }
+      .standing.p1 .rk { color: var(--mint); }
+      .standing.p2 .rk, .standing.p3 .rk { color: var(--sakura); }
+      .standing .nm {
+        font-size: 14px;
+        color: var(--cream);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .standing .sc {
+        font-family: var(--mono);
         font-size: 13px;
+        font-weight: 600;
+        color: var(--mint);
       }
-      .by b { color: var(--amber); font-weight: 650; }
-      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-      .chip {
+      .standing .mt {
+        grid-column: 2 / span 2;
         font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--dim);
+      }
+
+      .feed { display: flex; flex-direction: column; }
+      .feed-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 2px 10px;
+        padding: 9px 0;
+      }
+      .feed-row + .feed-row { border-top: 1px solid var(--line); }
+      .feed-row .nm {
+        font-size: 13px;
+        color: var(--cream);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rail-time {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--cream);
+        text-align: right;
+      }
+      .rail-time.best { color: var(--mint); }
+      .feed-row .on {
+        grid-column: 1;
+        font-size: 11px;
         color: var(--slate);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 3px 8px;
+        text-decoration: none;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      .chip.best { color: var(--mint); border-color: rgba(125, 255, 180, 0.35); }
+      .feed-row .on:hover { color: var(--sakura); }
+      .feed-row .ago {
+        grid-column: 2;
+        font-size: 11px;
+        color: var(--dim);
+        text-align: right;
+      }
 
-      .card-actions {
+      /* ---------------------------------------------------------------
+         Empty, loading and error states.
+         --------------------------------------------------------------- */
+      .empty, .status {
+        padding: 30px 26px;
+        color: var(--slate);
+        line-height: 1.6;
+        font-size: 15px;
+      }
+      .empty h2 {
+        margin: 0 0 8px;
+        font-size: 20px;
+        color: var(--cream);
+      }
+      .empty p { margin: 0 0 16px; max-width: 46em; }
+      .empty p:last-child { margin-bottom: 0; }
+      .status { text-align: center; color: var(--dim); }
+
+      .skeleton .tile { background: #0e1219; }
+      .skeleton .bone {
+        height: 11px;
+        border-radius: 2px;
+        background: rgba(157, 179, 200, 0.10);
+      }
+      .skeleton .bone.wide { width: 68%; height: 15px; }
+      .skeleton .bone.thin { width: 40%; }
+
+      /* ---------------------------------------------------------------
+         The course sheet. One course, full width: the simulator's own
+         orbit camera, the plan, the facts, and every time posted.
+         --------------------------------------------------------------- */
+      .sheet {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        background: radial-gradient(120% 90% at 50% 6%, #1e2a20, #0e1410 62%);
+      }
+      .sheet[hidden] { display: none; }
+      .sheet-inner {
+        width: var(--page);
+        margin: 0 auto;
+        padding: 26px 0 64px;
+      }
+      .sheet-top {
         display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 8px;
-        min-width: 132px;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+      .sheet-top h2 {
+        margin: 8px 0 0;
+        font-size: clamp(26px, 3.6vw, 42px);
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        line-height: 1.05;
+        overflow-wrap: anywhere;
+      }
+      .sheet-by {
+        margin: 10px 0 0;
+        color: var(--slate);
+        font-size: 14px;
+      }
+      .sheet-by b { color: var(--sakura); font-weight: 600; }
+
+      .sheet-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 26px;
+        align-items: start;
+      }
+      @media (min-width: 900px) {
+        .sheet-grid { grid-template-columns: minmax(0, 1.25fr) minmax(21em, 1fr); gap: 32px; }
       }
 
-      .board {
-        display: none;
-        padding: 0 16px 18px;
-        border-top: 1px solid var(--line);
+      .shot {
+        position: relative;
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        overflow: hidden;
+        border-radius: var(--radius);
+        background: #0b1219;
+        box-shadow: inset 0 0 0 1px var(--line), 0 16px 34px rgba(0, 0, 0, 0.4);
       }
-      .card.open .board { display: block; }
+      .shot canvas.plan, .shot iframe.orbit {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        object-fit: cover;
+      }
+      .shot iframe.orbit {
+        opacity: 0;
+        transition: opacity 600ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .shot iframe.orbit.ready { opacity: 1; }
+      .shot-wait {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 6px 11px;
+        border-radius: 3px;
+        background: rgba(11, 16, 12, 0.82);
+        box-shadow: inset 0 0 0 1px var(--line);
+        color: var(--slate);
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        transition: opacity 280ms ease;
+      }
+      .shot:has(.orbit.ready) .shot-wait { opacity: 0; }
+      .shot-wait[hidden] { display: none; }
+      .shot-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--amber);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+      .facts {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+        gap: 16px 20px;
+        margin: 20px 0 0;
+        padding: 16px 18px;
+        background: var(--sunk);
+        border-radius: var(--radius);
+        box-shadow: inset 0 0 0 1px var(--line);
+      }
+      .facts dt {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+        margin-bottom: 5px;
+      }
+      .facts dd {
+        margin: 0;
+        font-size: 14px;
+        color: var(--cream);
+      }
+
+      .sheet .actions { margin-top: 20px; }
+
+      .sheet-times { min-width: 0; }
+      .hero {
+        padding: 18px 20px 20px;
+        margin-bottom: 18px;
+      }
+      .hero[hidden] { display: none; }
+      .hero .record-label { font-size: 10px; margin-bottom: 6px; }
+      .hero .record-time { font-size: clamp(40px, 6vw, 58px); }
+      .hero .record-holder { margin-top: 8px; font-size: 15px; color: var(--cream); }
+
+      .board-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 6px;
+      }
+      .board-head h3 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
 
       table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 14px;
       }
       th, td {
         text-align: left;
-        padding: 8px 6px;
+        padding: 9px 8px;
         border-bottom: 1px solid var(--line);
-        font-size: 15px;
+        font-size: 14px;
       }
       th {
-        color: var(--amber);
-        font-size: 11px;
-        letter-spacing: 0.14em;
+        color: var(--sakura);
+        font-size: 9px;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         font-weight: 700;
+        border-bottom-color: rgba(232, 168, 184, 0.3);
       }
-      td.rank { color: var(--amber); font-weight: 700; width: 3.2em; }
-      tr:first-child td.rank { color: var(--mint); }
-      td.time { font-family: var(--mono); font-weight: 650; }
-      td.when { color: var(--dim); font-size: 12px; }
-      .none {
-        margin: 16px 0 4px;
-        color: var(--slate);
-        font-size: 14px;
-        line-height: 1.5;
+      th:first-child, td:first-child { padding-left: 0; }
+      th:last-child, td:last-child { padding-right: 0; }
+      th.time, th.gap, th.when,
+      td.time, td.gap, td.when { text-align: right; }
+      td.rank {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--dim);
+        width: 2.8em;
+      }
+      td.nm { color: var(--cream); }
+      td.time { font-family: var(--mono); font-weight: 600; color: var(--cream); width: 6em; }
+      td.gap { font-family: var(--mono); color: var(--sakura); font-size: 12px; width: 5em; }
+      td.when { color: var(--dim); font-size: 11px; white-space: nowrap; }
+      tr.r1 td.rank, tr.r1 td.time { color: var(--mint); }
+      tr.r2 td.rank, tr.r3 td.rank { color: var(--sakura); }
+      @media (max-width: 560px) {
+        th.gap, td.gap { display: none; }
       }
 
-      footer {
-        padding: 10px 8vw 28px;
+      /* The gap bar, the same idiom the simulator's finish screen uses to
+         show one lap against another. */
+      .gap-bar {
+        height: 3px;
+        margin-top: 6px;
+        border-radius: 2px;
+        background: rgba(11, 16, 12, 0.6);
+        box-shadow: inset 0 0 0 1px rgba(157, 179, 200, 0.2);
+        overflow: hidden;
+      }
+      .gap-bar span {
+        display: block;
+        height: 100%;
+        background: rgba(243, 234, 212, 0.5);
+      }
+      tr.r1 .gap-bar span { background: var(--mint); }
+
+      /* ---------------------------------------------------------------
+         Credits sheet. Same shell as the course sheet.
+         --------------------------------------------------------------- */
+      .credits-inner {
+        width: min(760px, 94vw);
+        margin: 0 auto;
+        padding: 26px 0 60px;
+      }
+      .credits-top {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 8px;
+      }
+      .credits-top h2 {
+        margin: 0;
+        font-size: clamp(24px, 3.4vw, 40px);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .credits-lede {
+        margin: 10px 0 24px;
+        color: var(--slate);
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      .credit-block { margin: 0 0 22px; }
+      .credit-kicker {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--sakura);
+        margin-bottom: 8px;
+      }
+      .credit-block h3 {
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--cream);
+      }
+      .credit {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px 16px 16px;
+        margin-bottom: 10px;
+        background: var(--panel);
+        border-radius: var(--radius);
+        border-top: 2px solid var(--edge);
+        box-shadow: inset 0 0 0 1px var(--line);
+      }
+      .credit-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+      @media (min-width: 640px) {
+        .credit-row.pair { grid-template-columns: 1fr 1fr; }
+        .credit-row.pilots { grid-template-columns: 1fr 1fr 1fr; }
+      }
+      .credit-logo {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 44px;
+      }
+      /* credits.js inlines each mark as an <svg> with its width and height
+         attributes stripped, so the size has to come from here. Without a
+         rule an inline svg fills the column and a wordmark ends up four
+         times the height of the card it labels. */
+      .credit-logo img, .credit-logo > svg {
+        display: block;
+        height: 40px;
+        width: auto;
+        max-width: min(100%, 260px);
+        object-fit: contain;
+      }
+      .credit-logo.light {
+        background: var(--cream);
+        border-radius: var(--radius);
+        padding: 10px 14px;
+        min-height: 0;
+        align-self: flex-start;
+      }
+      .credit-logo.light img, .credit-logo.light > svg { height: 30px; }
+      .credit-logo.plate { min-height: 0; }
+      .credit-logo-fallback {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--cream);
+      }
+      .maker-mark {
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        color: var(--cream);
+        line-height: 1;
+        text-shadow: 2px 2px 0 rgba(20, 28, 20, 0.82);
+      }
+      .maker-mark .fpv { color: var(--sakura); }
+      .pilot-chip {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border-radius: var(--radius);
+        background: var(--sunk);
+        box-shadow: inset 0 0 0 1px rgba(232, 168, 184, 0.45);
+        color: var(--sakura);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+      .credit-copy h4 {
+        margin: 0 0 6px;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--cream);
+      }
+      .credit-copy p {
+        margin: 0;
+        color: var(--slate);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .credit-copy a, .credits-legal a { color: var(--sakura); text-decoration: none; }
+      .credit-copy a:hover, .credits-legal a:hover { color: var(--cream); }
+      .credits-legal {
+        margin: 8px 0 6px;
         color: var(--dim);
         font-size: 12px;
-        letter-spacing: 0.04em;
+        line-height: 1.55;
+      }
+
+      /* ---------------------------------------------------------------
+         Footer.
+         --------------------------------------------------------------- */
+      footer {
+        width: var(--page);
+        margin: 0 auto;
+        padding: 22px 0 40px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+        align-items: baseline;
+        color: var(--dim);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      footer p { margin: 0; max-width: 52em; }
+      footer nav { display: flex; gap: 18px; margin-left: auto; }
+      footer a { color: var(--slate); text-decoration: none; }
+      footer a:hover { color: var(--sakura); }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation: none !important;
+          transition: none !important;
+        }
+        .card:hover, .card:focus-within { transform: none; }
       }
     </style>
   </head>
   <body>
+    <a class="skip" href="#courses">Skip to the courses</a>
     <div class="chequer" aria-hidden="true"></div>
-    <header>
+
+    <header class="mast">
       <div class="brand">
-        <h1>WEBFPV</h1>
-        <div class="sub">The board</div>
+        <h1>WEB<span class="fpv">FPV</span></h1>
+        <div class="eyebrow">The board</div>
+        <p class="invite">
+          Every published course, and the times flown on it. Open one, fly it in
+          the browser, and post a lap under your name.
+        </p>
       </div>
-      <nav class="links">
-        <a class="btn" id="sim-link" href="http://127.0.0.1:8000/">Open the simulator</a>
-        <a class="btn" id="builder-link" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Track builder</a>
-      </nav>
+      <div class="mast-side">
+        <dl class="stats" id="mast-stats" hidden>
+          <div><dt>Courses</dt><dd id="stat-courses">0</dd></div>
+          <div><dt>Times</dt><dd id="stat-times">0</dd></div>
+          <div><dt>Pilots</dt><dd id="stat-pilots">0</dd></div>
+        </dl>
+        <nav class="links">
+          <a class="btn" id="builder-link" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="text" id="sim-link" href="http://127.0.0.1:8000/">Open the simulator</a>
+          <a class="text" href="#credits">Credits</a>
+        </nav>
+      </div>
     </header>
-    <p class="intro">
-      Every course someone has published. Expand one to see who flew it fastest.
-      <strong>Fly this course</strong> opens the simulator in another tab.
-      Times you post there need a name. Nothing you build in the simulator is kept,
-      unless you publish it here.
-    </p>
-    <main id="list">
-      <div class="status">Loading the board.</div>
+
+    <div class="spine">
+      <div class="chequer" aria-hidden="true"></div>
+      <div class="spine-inner">
+        <span class="spine-mark">WEB<span class="fpv">FPV</span></span>
+        <span class="spine-stats" id="spine-stats"></span>
+        <nav class="links">
+          <a class="text" id="spine-build" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="text" href="#credits">Credits</a>
+        </nav>
+      </div>
+    </div>
+
+    <main id="courses">
+      <div class="deck" id="deck">
+        <div class="deck-main">
+          <div class="toolbar" id="toolbar" hidden>
+            <div class="find">
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.5" />
+                <path d="M10.6 10.6 L14.5 14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
+              <input id="find" type="search" placeholder="Find a course or a pilot" aria-label="Find a course or a pilot" autocomplete="off" />
+              <kbd>/</kbd>
+            </div>
+            <div class="sort">
+              <label for="sort">Order</label>
+              <select id="sort">
+                <option value="flown">Most flown</option>
+                <option value="fastest">Fastest lap</option>
+                <option value="biggest">Most gates</option>
+                <option value="newest">Newest</option>
+                <option value="name">Name</option>
+              </select>
+            </div>
+            <span class="count" id="count"></span>
+          </div>
+          <div id="list" class="grid"></div>
+          <div id="notice"></div>
+        </div>
+        <aside class="rail" id="rail" hidden aria-label="Standings"></aside>
+      </div>
     </main>
-    <footer>WebFPV public board. Courses and times live here. The simulator itself keeps nothing.</footer>
+
+    <footer>
+      <p>
+        The WebFPV public board. Courses and named times live here. The simulator
+        itself keeps nothing: a track you build stays in your browser until you
+        publish it. Free software under GPLv3.
+      </p>
+      <nav>
+        <a id="foot-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
+        <a href="#credits">Credits</a>
+      </nav>
+    </footer>
+
+    <div id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="chequer" aria-hidden="true"></div>
+      <div class="sheet-inner">
+        <div class="sheet-top">
+          <div>
+            <div class="kicker" id="sheet-kicker">Course</div>
+            <h2 id="sheet-title"></h2>
+            <p class="sheet-by" id="sheet-by"></p>
+          </div>
+          <button type="button" class="btn" id="sheet-close">Close</button>
+        </div>
+        <div class="sheet-grid">
+          <div>
+            <div class="shot" id="sheet-shot"></div>
+            <dl class="facts" id="sheet-facts"></dl>
+            <div class="actions" id="sheet-actions"></div>
+          </div>
+          <div class="sheet-times">
+            <div class="hero panel" id="sheet-hero"></div>
+            <div id="sheet-board"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="credits-sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="credits-title">
+      <div class="chequer" aria-hidden="true"></div>
+      <div class="credits-inner">
+        <div class="credits-top">
+          <h2 id="credits-title" class="rule-after">Credits</h2>
+          <button type="button" class="btn" id="credits-close">Close</button>
+        </div>
+        <div id="credits-roll" class="credits-roll"></div>
+      </div>
+    </div>
+
     <script type="module" src="./app.js"></script>
   </body>
 </html>

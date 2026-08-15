@@ -24,7 +24,7 @@
 
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { extname, join, normalize, dirname } from 'node:path';
+import { extname, join, normalize, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './store.js';
 import { inspectDocument, normaliseLapMs, normaliseName } from './validate.js';
@@ -67,9 +67,25 @@ function requestOrigin(req) {
   if (boardPublic) {
     return boardPublic;
   }
-  const host = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${port}`;
-  const proto = req.headers['x-forwarded-proto'] || 'http';
-  return `${proto}://${host}`;
+  const trust = process.env.BOARD_TRUST_PROXY === '1';
+  const rawHost = (trust && req.headers['x-forwarded-host']) || req.headers.host || `127.0.0.1:${port}`;
+  const host = String(rawHost).split(',')[0].trim();
+  if (!/^[A-Za-z0-9.[\]:_-]+$/.test(host)) {
+    return `http://127.0.0.1:${port}`;
+  }
+  const proto = (trust && req.headers['x-forwarded-proto'])
+    ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+    : 'http';
+  const scheme = proto === 'https' ? 'https' : 'http';
+  return `${scheme}://${host}`;
+}
+
+function decodePathPart(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch (e) {
+    return null;
+  }
 }
 
 async function readBody(req, limit = 500_000) {
@@ -78,7 +94,10 @@ async function readBody(req, limit = 500_000) {
   for await (const chunk of req) {
     size += chunk.length;
     if (size > limit) {
-      throw new Error('That request is too large.');
+      req.destroy();
+      const err = new Error('That request is too large.');
+      err.status = 400;
+      throw err;
     }
     chunks.push(chunk);
   }
@@ -108,7 +127,12 @@ async function handleApi(req, res, url) {
 
   const one = path.match(/^\/api\/tracks\/([^/]+)$/);
   if (req.method === 'GET' && one) {
-    const track = await store.getTrack(decodeURIComponent(one[1]));
+    const id = decodePathPart(one[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const track = await store.getTrack(id);
     if (!track) {
       send(res, 404, { error: 'That course is not on the board.' });
       return;
@@ -119,7 +143,12 @@ async function handleApi(req, res, url) {
 
   const doc = path.match(/^\/api\/tracks\/([^/]+)\/document$/);
   if (req.method === 'GET' && doc) {
-    const payload = await store.getDocument(decodeURIComponent(doc[1]));
+    const id = decodePathPart(doc[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const payload = await store.getDocument(id);
     if (!payload) {
       send(res, 404, { error: 'That course is not on the board.' });
       return;
@@ -152,7 +181,7 @@ async function handleApi(req, res, url) {
       editKey: typeof body.editKey === 'string' ? body.editKey : '',
     });
     if (result.error) {
-      send(res, result.status || 400, { error: result.error });
+      send(res, result.status || 400, { error: result.error, conflict: Boolean(result.conflict) });
       return;
     }
     send(res, result.updated ? 200 : 201, result);
@@ -178,8 +207,13 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: 'That lap time is not usable.' });
       return;
     }
+    const trackId = decodePathPart(times[1]);
+    if (!trackId) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
     const result = await store.addTime({
-      trackId: decodeURIComponent(times[1]),
+      trackId,
       name,
       lapMs,
     });
@@ -195,12 +229,21 @@ async function handleApi(req, res, url) {
 }
 
 async function handleStatic(req, res, url) {
-  let rel = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '');
-  if (rel === '') {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch (e) {
+    send(res, 400, 'bad path', 'text/plain; charset=utf-8');
+    return;
+  }
+  let rel = normalize(decoded).replace(/^([/\\])+/, '');
+  if (rel === '' || rel === '.') {
     rel = 'index.html';
   }
-  const path = join(publicDir, rel);
-  if (!path.startsWith(publicDir)) {
+  const root = resolve(publicDir);
+  const path = resolve(root, rel);
+  const inside = path === root || path.startsWith(root + sep);
+  if (!inside || relative(root, path).split(sep).includes('..')) {
     send(res, 403, 'forbidden', 'text/plain; charset=utf-8');
     return;
   }
@@ -224,14 +267,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   try {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch (e) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       await handleApi(req, res, url);
       return;
     }
     await handleStatic(req, res, url);
   } catch (e) {
-    send(res, 500, { error: e.message || 'The board failed.' });
+    send(res, e.status || 500, { error: e.message || 'The board failed.' });
   }
 });
 

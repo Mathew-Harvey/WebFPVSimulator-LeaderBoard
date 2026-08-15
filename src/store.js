@@ -22,7 +22,7 @@
  * along with WebFPVLeaderboard. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -32,6 +32,17 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+async function writeAtomic(path, contents) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, contents, 'utf8');
+  try {
+    await rename(tmp, path);
+  } catch (e) {
+    await unlink(path).catch(() => {});
+    await rename(tmp, path);
+  }
 }
 
 function summaryOf(track, times) {
@@ -64,23 +75,39 @@ class FileStore {
   constructor(path) {
     this.path = path;
     this.data = emptyFile();
+    this.mutex = Promise.resolve();
+  }
+
+  lock(fn) {
+    const run = this.mutex.then(fn, fn);
+    this.mutex = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   async init() {
     await mkdir(dirname(this.path), { recursive: true });
     try {
-      this.data = JSON.parse(await readFile(this.path, 'utf8'));
-      if (!this.data.tracks || !this.data.times) {
+      const raw = await readFile(this.path, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!parsed.tracks || !parsed.times) {
+        console.error('board.json is missing tracks or times; starting empty in memory and leaving the file alone.');
         this.data = emptyFile();
+        return;
       }
+      this.data = parsed;
     } catch (e) {
+      if (e.code === 'ENOENT') {
+        this.data = emptyFile();
+        await this.flush();
+        return;
+      }
+      console.error('board.json could not be read; starting empty in memory and leaving the file alone.', e);
       this.data = emptyFile();
-      await this.flush();
     }
   }
 
   async flush() {
-    await writeFile(this.path, JSON.stringify(this.data), 'utf8');
+    await writeAtomic(this.path, JSON.stringify(this.data));
   }
 
   async listTracks() {
@@ -113,16 +140,27 @@ class FileStore {
   }
 
   async publish({ inspected, author, editKey }) {
+    return this.lock(() => this.publishUnlocked({ inspected, author, editKey }));
+  }
+
+  async publishUnlocked({ inspected, author, editKey }) {
     const existing = this.data.tracks[inspected.id];
     let key = editKey;
     let timesCleared = false;
     if (existing) {
       if (!editKey || hashEditKey(editKey) !== existing.editKeyHash) {
-        return { error: 'This course is already on the board. Publish it again from the browser that first sent it.', status: 409 };
+        return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
       }
       if (existing.layoutHash !== inspected.layoutHash) {
         this.data.times[inspected.id] = [];
         timesCleared = true;
+      } else if (existing.author !== author) {
+        const times = this.data.times[inspected.id] || [];
+        for (const row of times) {
+          if (row.name === existing.author) {
+            row.name = author;
+          }
+        }
       }
     } else {
       key = randomBytes(16).toString('hex');
@@ -157,6 +195,10 @@ class FileStore {
   }
 
   async addTime({ trackId, name, lapMs }) {
+    return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs }));
+  }
+
+  async addTimeUnlocked({ trackId, name, lapMs }) {
     const track = this.data.tracks[trackId];
     if (!track) {
       return { error: 'That course is not on the board.', status: 404 };
@@ -230,76 +272,114 @@ class PgStore {
   }
 
   async publish({ inspected, author, editKey }) {
-    const existing = await this.pool.query('SELECT * FROM tracks WHERE id = $1', [inspected.id]);
-    let key = editKey;
-    let timesCleared = false;
-    if (existing.rowCount) {
-      const row = existing.rows[0];
-      if (!editKey || hashEditKey(editKey) !== row.edit_key_hash) {
-        return { error: 'This course is already on the board. Publish it again from the browser that first sent it.', status: 409 };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query('SELECT * FROM tracks WHERE id = $1 FOR UPDATE', [inspected.id]);
+      let key = editKey;
+      let timesCleared = false;
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        if (!editKey || hashEditKey(editKey) !== row.edit_key_hash) {
+          await client.query('ROLLBACK');
+          return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
+        }
+        if (row.layout_hash !== inspected.layoutHash) {
+          await client.query('DELETE FROM times WHERE track_id = $1', [inspected.id]);
+          timesCleared = true;
+        } else if (row.author !== author) {
+          await client.query(
+            'UPDATE times SET name = $2 WHERE track_id = $1 AND name = $3',
+            [inspected.id, author, row.author],
+          );
+        }
+        await client.query(
+          `UPDATE tracks SET
+            name = $2, author = $3, document = $4, plan = $5, layout_hash = $6,
+            has_logo = $7, gates = $8, elements = $9, updated_utc = NOW()
+           WHERE id = $1`,
+          [
+            inspected.id, inspected.name, author, inspected.document, inspected.plan,
+            inspected.layoutHash, inspected.hasLogo, inspected.gates, inspected.elements,
+          ],
+        );
+      } else {
+        key = randomBytes(16).toString('hex');
+        await client.query(
+          `INSERT INTO tracks (
+            id, name, author, document, plan, layout_hash, edit_key_hash,
+            has_logo, gates, elements, published_utc, updated_utc
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())`,
+          [
+            inspected.id, inspected.name, author, inspected.document, inspected.plan,
+            inspected.layoutHash, hashEditKey(key), inspected.hasLogo, inspected.gates,
+            inspected.elements,
+          ],
+        );
       }
-      if (row.layout_hash !== inspected.layoutHash) {
-        await this.pool.query('DELETE FROM times WHERE track_id = $1', [inspected.id]);
-        timesCleared = true;
+      await client.query('COMMIT');
+      return {
+        id: inspected.id,
+        name: inspected.name,
+        author,
+        editKey: existing.rowCount ? undefined : key,
+        updated: Boolean(existing.rowCount),
+        timesCleared,
+      };
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (ignored) {
+        /* Connection may already be dead. */
       }
-      await this.pool.query(
-        `UPDATE tracks SET
-          name = $2, author = $3, document = $4, plan = $5, layout_hash = $6,
-          has_logo = $7, gates = $8, elements = $9, updated_utc = NOW()
-         WHERE id = $1`,
-        [
-          inspected.id, inspected.name, author, inspected.document, inspected.plan,
-          inspected.layoutHash, inspected.hasLogo, inspected.gates, inspected.elements,
-        ],
-      );
-    } else {
-      key = randomBytes(16).toString('hex');
-      await this.pool.query(
-        `INSERT INTO tracks (
-          id, name, author, document, plan, layout_hash, edit_key_hash,
-          has_logo, gates, elements, published_utc, updated_utc
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())`,
-        [
-          inspected.id, inspected.name, author, inspected.document, inspected.plan,
-          inspected.layoutHash, hashEditKey(key), inspected.hasLogo, inspected.gates,
-          inspected.elements,
-        ],
-      );
+      if (e.code === '23505') {
+        return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
+      }
+      throw e;
+    } finally {
+      client.release();
     }
-    return {
-      id: inspected.id,
-      name: inspected.name,
-      author,
-      editKey: existing.rowCount ? undefined : key,
-      updated: Boolean(existing.rowCount),
-      timesCleared,
-    };
   }
 
   async addTime({ trackId, name, lapMs }) {
-    const found = await this.pool.query('SELECT id FROM tracks WHERE id = $1', [trackId]);
-    if (!found.rowCount) {
-      return { error: 'That course is not on the board.', status: 404 };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const found = await client.query('SELECT id FROM tracks WHERE id = $1 FOR UPDATE', [trackId]);
+      if (!found.rowCount) {
+        await client.query('ROLLBACK');
+        return { error: 'That course is not on the board.', status: 404 };
+      }
+      const inserted = await client.query(
+        `INSERT INTO times (track_id, name, lap_ms, posted_utc)
+         VALUES ($1, $2, $3, NOW())
+         RETURNING name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
+        [trackId, name, lapMs],
+      );
+      const rankRow = await client.query(
+        `SELECT COUNT(*)::int AS n FROM times
+         WHERE track_id = $1 AND (lap_ms < $2 OR (lap_ms = $2 AND posted_utc <= $3))`,
+        [trackId, lapMs, inserted.rows[0].postedUtc],
+      );
+      const count = await client.query('SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1', [trackId]);
+      await client.query('COMMIT');
+      return {
+        name,
+        lapMs,
+        postedUtc: inserted.rows[0].postedUtc,
+        rank: rankRow.rows[0].n,
+        times: count.rows[0].n,
+      };
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (ignored) {
+        /* Connection may already be dead. */
+      }
+      throw e;
+    } finally {
+      client.release();
     }
-    const inserted = await this.pool.query(
-      `INSERT INTO times (track_id, name, lap_ms, posted_utc)
-       VALUES ($1, $2, $3, NOW())
-       RETURNING name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
-      [trackId, name, lapMs],
-    );
-    const rankRow = await this.pool.query(
-      `SELECT COUNT(*)::int AS n FROM times
-       WHERE track_id = $1 AND (lap_ms < $2 OR (lap_ms = $2 AND posted_utc <= $3))`,
-      [trackId, lapMs, inserted.rows[0].postedUtc],
-    );
-    const count = await this.pool.query('SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1', [trackId]);
-    return {
-      name,
-      lapMs,
-      postedUtc: inserted.rows[0].postedUtc,
-      rank: rankRow.rows[0].n,
-      times: count.rows[0].n,
-    };
   }
 }
 
