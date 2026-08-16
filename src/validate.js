@@ -65,27 +65,74 @@ export function hashEditKey(key) {
   return createHash('sha256').update(String(key)).digest('hex');
 }
 
+const PLAN_SKIP = new Set(['label', 'waypoint']);
+const PLAN_APERTURE = new Set([
+  'gate', 'flaggedGate', 'doubleStack', 'flaggedDoubleStack', 'ladder', 'tower', 'diveGate',
+]);
+
 export function planFromDocument(document) {
   const field = isObject(document.field) ? document.field : {};
+  const byId = new Map();
+  const sequenced = new Set();
+  for (const step of document.sequence || []) {
+    if (isObject(step) && typeof step.elementId === 'string' && step.elementId) {
+      sequenced.add(step.elementId);
+    }
+  }
   const marks = [];
   for (const el of document.elements || []) {
     if (!isObject(el) || !isObject(el.position)) {
       continue;
     }
-    if (el.type === 'label') {
+    if (typeof el.id === 'string' && el.id) {
+      byId.set(el.id, el);
+    }
+    const type = String(el.type || 'gate');
+    /* A waypoint is a flying-order pin with nothing standing on the
+     * field. Drawing it as a gate was how championship plans turned into
+     * a scatter of bars that are not on the course. Labels are notes. */
+    if (PLAN_SKIP.has(type)) {
       continue;
     }
     marks.push({
-      type: String(el.type || 'gate'),
+      type,
       x: Number(el.position.x) || 0,
       y: Number(el.position.y) || 0,
       yaw: Number(el.yaw) || 0,
+      seq: sequenced.has(el.id),
     });
+  }
+  const path = [];
+  const numbers = [];
+  const numbered = new Set();
+  let n = 0;
+  for (const step of document.sequence || []) {
+    if (!isObject(step)) {
+      continue;
+    }
+    const el = byId.get(step.elementId);
+    if (!el || !isObject(el.position)) {
+      continue;
+    }
+    const x = Number(el.position.x) || 0;
+    const y = Number(el.position.y) || 0;
+    const last = path[path.length - 1];
+    if (!last || last.x !== x || last.y !== y) {
+      path.push({ x, y });
+    }
+    const type = String(el.type || '');
+    if (PLAN_APERTURE.has(type) && el.id && !numbered.has(el.id)) {
+      numbered.add(el.id);
+      n += 1;
+      numbers.push({ n, x, y });
+    }
   }
   return {
     width: Number(field.width) || 60,
     depth: Number(field.depth) || 40,
     marks,
+    path,
+    numbers,
   };
 }
 

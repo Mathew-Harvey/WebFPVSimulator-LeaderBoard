@@ -84,6 +84,53 @@ async function testValidate() {
   const a = layoutHash(sampleDoc());
   const b = layoutHash(sampleDoc('trk-1a2b3c4d', { name: 'Renamed' }));
   check('layout hash ignores the title', a === b);
+  const pinned = inspectDocument(sampleDoc('trk-1a2b3c4d', {
+    elements: [
+      {
+        id: 'el-1',
+        type: 'gate',
+        name: 'Gate',
+        position: { x: 10, y: 8, z: 0 },
+        yaw: 0,
+        pitch: 0,
+        yawOverridden: false,
+        dims: { clearW: 1.524, clearH: 1.524, sillH: 0, levels: 1 },
+      },
+      {
+        id: 'el-2',
+        type: 'waypoint',
+        name: 'Pin',
+        position: { x: 22, y: 18, z: 1.2 },
+        yaw: 0.4,
+        pitch: 0,
+        yawOverridden: false,
+        dims: { height: 1.6, poleRadius: 0.02, clearance: 0 },
+      },
+      {
+        id: 'el-3',
+        type: 'flag',
+        name: 'Dress',
+        position: { x: 40, y: 30, z: 0 },
+        yaw: 0,
+        pitch: 0,
+        yawOverridden: false,
+        dims: { height: 2.5, poleRadius: 0.025, clearance: 1.5 },
+      },
+    ],
+    sequence: [
+      { id: 'seq-1', elementId: 'el-1', apertureIndex: 0, entry: 1 },
+      { id: 'seq-2', elementId: 'el-2', apertureIndex: 0, entry: 1 },
+    ],
+  }));
+  check('plan omits waypoints', pinned.plan.marks.every((m) => m.type !== 'waypoint'));
+  check('plan path follows the flying order through a waypoint',
+    pinned.plan.path.length === 2
+    && pinned.plan.path[0].x === 10
+    && pinned.plan.path[1].x === 22);
+  check('an unused flag is marked off the flying order',
+    pinned.plan.marks.some((m) => m.type === 'flag' && m.seq === false));
+  check('the start of the flying order is numbered 1',
+    pinned.plan.numbers.length === 1 && pinned.plan.numbers[0].n === 1);
 }
 
 async function testStore() {
@@ -138,6 +185,16 @@ async function testStore() {
   check('parallel posts both land', afterParallel.times.length === 4);
   const list = await store.listTracks();
   check('the list names the author', list[0].author === 'Ada Rook' && list[0].best.lapMs === 33400);
+  store.data.tracks[inspected.id].plan = {
+    width: 60,
+    depth: 40,
+    marks: [{ type: 'waypoint', x: 1, y: 1, yaw: 0 }],
+  };
+  const relist = await store.listTracks();
+  check('the list plan is rebuilt from the document',
+    relist[0].plan.marks.every((m) => m.type !== 'waypoint')
+    && relist[0].plan.path.length === 1
+    && relist[0].plan.path[0].x === 20);
   const doc = await store.getDocument(inspected.id);
   check('the document is still there', doc.document.id === inspected.id);
   await rm(dir, { recursive: true, force: true });

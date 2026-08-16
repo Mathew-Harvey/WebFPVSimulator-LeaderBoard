@@ -3,7 +3,9 @@
  *
  * One tile per published course, ordered by a control the reader can see
  * and change. The tile art is the course plan, drawn from the list payload
- * by plan.js, so the index costs two requests and no WebGL. Opening a
+ * by plan.js: the flown line and the things that stand on the field, so a
+ * waypoint that pins the line does not stand in as a gate. The index costs
+ * two requests and no WebGL. Opening a
  * course is a real link, #course=trk-1a2b3c4d, and the sheet behind it is
  * where the expensive and beautiful thing lives: the simulator's own title
  * camera, playing once rather than twelve times at once.

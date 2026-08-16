@@ -2,16 +2,17 @@
  * plan.js: a published course, drawn as a plan.
  *
  * Every course on the board already ships a plan in the list payload: the
- * field size, and one mark per element with a position and a yaw. That is
- * enough to draw the thing, and drawing it is free. The alternative, which
- * is what this page used to do, was to iframe the simulator once per card
- * and have it build an entire world to record a thumbnail. Twelve courses
- * meant twelve worlds.
+ * field size, the things that stand on it, and the flown line in flying
+ * order. That is enough to draw the thing, and drawing it is free. The
+ * alternative, which is what this page used to do, was to iframe the
+ * simulator once per card and have it build an entire world to record a
+ * thumbnail. Twelve courses meant twelve worlds.
  *
  * The drawing speaks the track builder's own language, so a course looks
  * the same on the board as it does in the editor that made it: a cool
- * blueprint plate, a slate grid, a cream boundary, pale apertures across
- * the direction of travel, cream turn markers, a mint start.
+ * blueprint plate, a slate grid, the flown line, pale apertures across
+ * the direction of travel, cream turn markers, a mint start. Waypoints
+ * are omitted. They pin the line and nothing stands there.
  *
  * Local axes inside a mark, after translate and rotate(-yaw): local x is
  * the direction of travel through the element, local y is its width. That
@@ -53,13 +54,16 @@ const C = {
   barrier: 'rgba(255, 125, 125, 0.45)',
   barrierEdge: 'rgba(255, 154, 154, 0.85)',
   start: '#7dffb4',
+  path: 'rgba(255, 212, 92, 0.28)',
+  pathCore: 'rgba(255, 212, 92, 0.88)',
+  number: '#101a26',
+  numberBg: '#f7e8cd',
   scale: 'rgba(157, 179, 200, 0.55)',
 };
 
-/* Metres. The board's plan carries no dimensions, only a type and a yaw,
- * so these are the track builder's defaults for each element. A course
- * authored with an unusual gate is drawn at the standard size, which is
- * the right trade for a thumbnail. */
+/* Metres. A thumbnail fattens a 5 ft opening so it still reads on a
+ * hundred metre field. Types the drawer does not know stay off the
+ * plate; the flown line is what makes two courses look different. */
 const GATE_W = 1.524;      /* 5 ft clear opening, the chapter standard */
 const GATE_D = 0.36;       /* frame depth, enough to read as a solid */
 const DIVE_W = 2.13;       /* 7 ft, flown through from above */
@@ -159,8 +163,8 @@ function grid(ctx, box) {
  * a ladder is not a gate even in a thumbnail.
  */
 function aperture(ctx, s, levels) {
-  const half = Math.max(4.5, (GATE_W * 0.5) * s);
-  const depth = Math.max(2.4, GATE_D * s) * (levels > 1 ? 1.8 : 1);
+  const half = Math.max(3.2, (GATE_W * 0.5) * s);
+  const depth = Math.max(1.8, GATE_D * s) * (levels > 1 ? 1.8 : 1);
   ctx.beginPath();
   ctx.rect(-depth * 0.5, -half, depth, half * 2);
   ctx.fillStyle = C.gate;
@@ -205,7 +209,7 @@ function barrier(ctx, s) {
 }
 
 function marker(ctx, s, cone) {
-  const r = Math.max(2, s * 0.24);
+  const r = Math.max(1.6, s * 0.18);
   ctx.beginPath();
   if (cone) {
     ctx.moveTo(0, -r * 1.3);
@@ -238,6 +242,71 @@ function startPads(ctx, s) {
   ctx.closePath();
   ctx.fillStyle = C.start;
   ctx.fill();
+}
+
+function toScreen(box, x, y) {
+  return {
+    x: box.ox + (Number(x) || 0) * box.s,
+    y: box.oy + (box.fd - (Number(y) || 0)) * box.s,
+  };
+}
+
+function strokePoly(ctx, pts) {
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.stroke();
+}
+
+/*
+ * The flown line, in flying order. Straight segments between the knots
+ * the sequence already named: enough to read the lap as a shape, which
+ * a scatter of gates never was. Consecutive knots that share a point
+ * (a stack flown twice) are already collapsed in the payload. A circuit
+ * closes back to the first gate when the last knot is not already there.
+ */
+function raceLine(ctx, box, path) {
+  if (!path || path.length < 2) {
+    return;
+  }
+  const pts = path.map((p) => toScreen(box, p.x, p.y));
+  const a = pts[0];
+  const b = pts[pts.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) > Math.max(8, box.s * 2)) {
+    pts.push(a);
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(box.ox, box.oy, box.fw * box.s, box.fd * box.s);
+  ctx.clip();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const core = Math.max(1.4, Math.min(2.8, box.s * 0.38));
+  ctx.strokeStyle = C.path;
+  ctx.lineWidth = core + 2.4;
+  strokePoly(ctx, pts);
+  ctx.strokeStyle = C.pathCore;
+  ctx.lineWidth = core;
+  strokePoly(ctx, pts);
+  ctx.restore();
+}
+
+function gateNumbers(ctx, box, numbers) {
+  if (!numbers || !numbers.length) {
+    return;
+  }
+  const r = Math.max(6, Math.min(9, box.s * 0.55));
+  ctx.font = `600 ${Math.round(r * 1.15)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const mark of numbers) {
+    const p = toScreen(box, mark.x, mark.y);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = C.numberBg;
+    ctx.fill();
+    ctx.fillStyle = C.number;
+    ctx.fillText(String(mark.n), p.x, p.y + 0.5);
+  }
 }
 
 function scaleBar(ctx, box, w, h) {
@@ -304,14 +373,27 @@ export function drawPlan(canvas, plan, options = {}) {
   if (!plan) {
     return true;
   }
+  raceLine(ctx, box, plan.path);
   const marks = [...(plan.marks || [])].sort((a, b) => order(a.type) - order(b.type));
   for (const mark of marks) {
-    const x = box.ox + (Number(mark.x) || 0) * box.s;
-    const y = box.oy + (box.fd - (Number(mark.y) || 0)) * box.s;
+    const type = String(mark.type || '');
+    /* Waypoints used to fall through to aperture() and stand in as
+     * gates. Anything we do not have a drawing for stays off the plate. */
+    if (!type || type === 'waypoint' || type === 'label') {
+      continue;
+    }
+    const known = type === 'startPads' || type === 'barrier' || type === 'flag'
+      || type === 'cone' || type === 'diveGate' || LEVELS[type];
+    if (!known) {
+      continue;
+    }
+    const p = toScreen(box, mark.x, mark.y);
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(p.x, p.y);
     ctx.rotate(-(Number(mark.yaw) || 0));
-    const type = String(mark.type || 'gate');
+    if ((type === 'flag' || type === 'cone') && mark.seq === false) {
+      ctx.globalAlpha = 0.38;
+    }
     if (type === 'startPads') {
       startPads(ctx, box.s);
     } else if (type === 'barrier') {
@@ -321,11 +403,12 @@ export function drawPlan(canvas, plan, options = {}) {
     } else if (type === 'diveGate') {
       diveGate(ctx, box.s);
     } else {
-      aperture(ctx, box.s, LEVELS[type] || 1);
+      aperture(ctx, box.s, LEVELS[type]);
     }
     ctx.restore();
   }
   if (options.scaleBar) {
+    gateNumbers(ctx, box, plan.numbers);
     scaleBar(ctx, box, w, h);
   }
   return true;

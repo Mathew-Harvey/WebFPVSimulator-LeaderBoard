@@ -26,7 +26,7 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { hashEditKey } from './validate.js';
+import { hashEditKey, planFromDocument } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -45,6 +45,15 @@ async function writeAtomic(path, contents) {
   }
 }
 
+function livePlan(track) {
+  /* Rebuilt from the document on every list, so a drawing fix does not
+   * wait for every course to be republished. */
+  if (track && track.document) {
+    return planFromDocument(track.document);
+  }
+  return track && track.plan ? track.plan : { width: 60, depth: 40, marks: [], path: [] };
+}
+
 function summaryOf(track, times) {
   const ranked = [...times].sort((a, b) => a.lapMs - b.lapMs || a.postedUtc.localeCompare(b.postedUtc));
   const best = ranked[0] || null;
@@ -55,7 +64,7 @@ function summaryOf(track, times) {
     gates: track.gates,
     elements: track.elements,
     hasLogo: track.hasLogo,
-    plan: track.plan,
+    plan: livePlan(track),
     publishedUtc: track.publishedUtc,
     updatedUtc: track.updatedUtc,
     times: ranked.length,
@@ -384,6 +393,7 @@ class PgStore {
 }
 
 function rowToSummary(row) {
+  const layout = row.document || row.layout;
   return {
     id: row.id,
     name: row.name,
@@ -391,7 +401,7 @@ function rowToSummary(row) {
     gates: row.gates,
     elements: row.elements,
     hasLogo: row.has_logo,
-    plan: row.plan,
+    plan: layout ? planFromDocument(layout) : row.plan,
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,
   };
