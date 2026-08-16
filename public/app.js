@@ -1033,10 +1033,27 @@ async function start() {
   const notice = byId('notice');
   skeletons(list, 6);
 
+  /*
+   * The status matters. Reading the body and ignoring `r.ok` meant a 500
+   * from the database, or a 502 from in front of it, parsed to an object
+   * with no `tracks` in it and painted "The board is empty": the one screen
+   * that tells a visitor to go and build the first course, shown while
+   * every course on the board was sitting there unreachable. An error
+   * belongs in the catch below, which already has a panel for it.
+   */
+  const getJson = async (url) => {
+    const r = await fetch(url);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      throw new Error(body.error || `The board answered ${r.status}.`);
+    }
+    return body;
+  };
+
   try {
-    state.config = await fetch('/api/config').then((r) => r.json());
+    state.config = await getJson('/api/config');
     bindLinks(state.config);
-    const payload = await fetch('/api/tracks').then((r) => r.json());
+    const payload = await getJson('/api/tracks');
     state.courses = payload.tracks || [];
   } catch (e) {
     list.textContent = '';

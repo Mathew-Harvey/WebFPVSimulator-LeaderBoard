@@ -27,7 +27,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './store.js';
-import { inspectDocument, normaliseLapMs, normaliseName } from './validate.js';
+import { inspectDocument, normaliseLapMs, normaliseName, TRACK_ID_RE } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(root, 'public');
@@ -88,6 +88,20 @@ function decodePathPart(raw) {
   }
 }
 
+/*
+ * A course id out of the path, or null. The shape check is not decoration.
+ * The file store keeps its courses in a plain object, so an id of
+ * 'constructor' or '__proto__' used to find something on Object.prototype:
+ * the lookup came back truthy and the request went on to read a course out
+ * of a function, which is a 500 rather than the 404 it should be. Every id
+ * the board holds passed this same expression through inspectDocument at
+ * publish time, so nothing real can fail it.
+ */
+function trackIdFrom(raw) {
+  const id = decodePathPart(raw);
+  return id && TRACK_ID_RE.test(id) ? id : null;
+}
+
 async function readBody(req, limit = 500_000) {
   const chunks = [];
   let size = 0;
@@ -127,7 +141,7 @@ async function handleApi(req, res, url) {
 
   const one = path.match(/^\/api\/tracks\/([^/]+)$/);
   if (req.method === 'GET' && one) {
-    const id = decodePathPart(one[1]);
+    const id = trackIdFrom(one[1]);
     if (!id) {
       send(res, 400, { error: 'That address is not usable.' });
       return;
@@ -143,7 +157,7 @@ async function handleApi(req, res, url) {
 
   const doc = path.match(/^\/api\/tracks\/([^/]+)\/document$/);
   if (req.method === 'GET' && doc) {
-    const id = decodePathPart(doc[1]);
+    const id = trackIdFrom(doc[1]);
     if (!id) {
       send(res, 400, { error: 'That address is not usable.' });
       return;
@@ -207,7 +221,7 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: 'That lap time is not usable.' });
       return;
     }
-    const trackId = decodePathPart(times[1]);
+    const trackId = trackIdFrom(times[1]);
     if (!trackId) {
       send(res, 400, { error: 'That address is not usable.' });
       return;

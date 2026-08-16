@@ -94,17 +94,32 @@ export function planFromDocument(document) {
     if (PLAN_SKIP.has(type)) {
       continue;
     }
+    /*
+     * The three numbers the drawer cannot guess. It used to reconstruct
+     * every size from a hard copy of the builder's type DEFAULTS, but each
+     * of these is editable per element: a ladder taken to five levels drew
+     * three arcs, a twenty metre barrier drew as four, and the gate count
+     * printed on the same card told the truth the picture did not.
+     * Undefined when the element does not carry one, so an older stored
+     * plan still falls back to the defaults.
+     */
+    const levels = Number(el.dims?.levels);
+    const barrierW = Number(el.dims?.width);
+    const barrierD = Number(el.dims?.depth);
     marks.push({
       type,
       x: Number(el.position.x) || 0,
       y: Number(el.position.y) || 0,
       yaw: Number(el.yaw) || 0,
       seq: sequenced.has(el.id),
+      levels: Number.isFinite(levels) && levels > 0 ? levels : undefined,
+      w: Number.isFinite(barrierW) && barrierW > 0 ? barrierW : undefined,
+      d: Number.isFinite(barrierD) && barrierD > 0 ? barrierD : undefined,
     });
   }
   const path = [];
   const numbers = [];
-  const numbered = new Set();
+  const stacked = new Map();
   let n = 0;
   for (const step of document.sequence || []) {
     if (!isObject(step)) {
@@ -121,10 +136,20 @@ export function planFromDocument(document) {
       path.push({ x, y });
     }
     const type = String(el.type || '');
-    if (PLAN_APERTURE.has(type) && el.id && !numbered.has(el.id)) {
-      numbered.add(el.id);
+    /*
+     * One badge per FLYING ORDER ENTRY, not per element. Numbering by
+     * element id gave a stacked gate flown three times a single badge and
+     * left the plan's last number short of the gate count printed on the
+     * same card, and short of what the simulator's own OSD counts down.
+     * `stack` is how many badges already sit on this exact spot, so the
+     * drawer can step them apart the way the builder does.
+     */
+    if (PLAN_APERTURE.has(type) && el.id) {
+      const spot = `${x},${y}`;
+      const stack = stacked.get(spot) || 0;
+      stacked.set(spot, stack + 1);
       n += 1;
-      numbers.push({ n, x, y });
+      numbers.push({ n, x, y, stack });
     }
   }
   return {

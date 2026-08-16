@@ -362,13 +362,26 @@ class PgStore {
       const inserted = await client.query(
         `INSERT INTO times (track_id, name, lap_ms, posted_utc)
          VALUES ($1, $2, $3, NOW())
-         RETURNING name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
+         RETURNING id, name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
         [trackId, name, lapMs],
       );
+      /*
+       * Ranked against the stored row, by its id, and entirely inside
+       * Postgres. The old form sent the returned timestamp back as a
+       * parameter to compare against itself, and posted_utc is a TIMESTAMPTZ
+       * with microseconds while a JS Date carries milliseconds. The value
+       * that came back had been truncated, so `posted_utc <= $3` was false
+       * for the row just written and the count missed itself: the fastest
+       * lap on the board reported rank 0. Comparing by id never leaves the
+       * database and cannot lose precision.
+       */
       const rankRow = await client.query(
-        `SELECT COUNT(*)::int AS n FROM times
-         WHERE track_id = $1 AND (lap_ms < $2 OR (lap_ms = $2 AND posted_utc <= $3))`,
-        [trackId, lapMs, inserted.rows[0].postedUtc],
+        `WITH mine AS (SELECT lap_ms, posted_utc FROM times WHERE id = $2)
+         SELECT COUNT(*)::int AS n FROM times, mine
+         WHERE times.track_id = $1
+           AND (times.lap_ms < mine.lap_ms
+                OR (times.lap_ms = mine.lap_ms AND times.posted_utc <= mine.posted_utc))`,
+        [trackId, inserted.rows[0].id],
       );
       const count = await client.query('SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1', [trackId]);
       await client.query('COMMIT');

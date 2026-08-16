@@ -17,6 +17,14 @@ services:
         sync: false
       - key: BOARD_PUBLIC_ORIGIN
         sync: false
+      # Render terminates TLS in front of the app, so the request arrives
+      # over plain http and only x-forwarded-proto knows it was https.
+      # Without this the board writes http:// Fly links, which a browser on
+      # an https page refuses as mixed content. The server ignores the
+      # header unless this is set, so a directly exposed instance still
+      # cannot be told its own scheme by a client.
+      - key: BOARD_TRUST_PROXY
+        value: "1"
 
 databases:
   - name: webfpvleaderboard-db

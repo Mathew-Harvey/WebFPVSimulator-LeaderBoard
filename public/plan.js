@@ -196,9 +196,14 @@ function diveGate(ctx, s) {
   ctx.fill();
 }
 
-function barrier(ctx, s) {
-  const w = Math.max(2, BARRIER_D * s);
-  const h = Math.max(4, BARRIER_W * s);
+/* Local +x is the barrier's heading, and its long side runs along it. The
+ * axes used to be the other way round here, which stood every barrier on the
+ * board a quarter turn out of the one the builder and the simulator draw:
+ * scene.js lays the collider along (cos yaw, -sin yaw) and view2d.js gives
+ * boxCorners the width as its along-yaw argument. */
+function barrier(ctx, s, dims) {
+  const w = Math.max(4, (dims && dims.w > 0 ? dims.w : BARRIER_W) * s);
+  const h = Math.max(2, (dims && dims.d > 0 ? dims.d : BARRIER_D) * s);
   ctx.beginPath();
   ctx.rect(-w * 0.5, -h * 0.5, w, h);
   ctx.fillStyle = C.barrier;
@@ -300,12 +305,16 @@ function gateNumbers(ctx, box, numbers) {
   ctx.textBaseline = 'middle';
   for (const mark of numbers) {
     const p = toScreen(box, mark.x, mark.y);
+    /* Stacked upward when one structure is flown more than once, so a
+     * ladder taken twice shows both of its numbers instead of hiding one
+     * badge exactly behind the other. The builder stacks the same way. */
+    const y = p.y - (Number(mark.stack) || 0) * (r * 2.1);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.arc(p.x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = C.numberBg;
     ctx.fill();
     ctx.fillStyle = C.number;
-    ctx.fillText(String(mark.n), p.x, p.y + 0.5);
+    ctx.fillText(String(mark.n), p.x, y + 0.5);
   }
 }
 
@@ -397,13 +406,15 @@ export function drawPlan(canvas, plan, options = {}) {
     if (type === 'startPads') {
       startPads(ctx, box.s);
     } else if (type === 'barrier') {
-      barrier(ctx, box.s);
+      barrier(ctx, box.s, mark);
     } else if (type === 'flag' || type === 'cone') {
       marker(ctx, box.s, type === 'cone');
     } else if (type === 'diveGate') {
       diveGate(ctx, box.s);
     } else {
-      aperture(ctx, box.s, LEVELS[type]);
+      /* The authored level count when the plan carries one, the type
+       * default when it is an older stored plan that does not. */
+      aperture(ctx, box.s, mark.levels > 0 ? mark.levels : LEVELS[type]);
     }
     ctx.restore();
   }
