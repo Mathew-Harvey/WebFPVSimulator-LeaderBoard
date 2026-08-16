@@ -25,6 +25,9 @@
 
 import { createHash } from 'node:crypto';
 
+/* MIRRORS NAME_RE in WebFPVSimulator/src/share/pilot.js. This copy is the
+ * one that decides; the simulator's is a prediction of it so a pilot is told
+ * before they upload. Two repos, so change both. */
 export const NAME_RE = /^[A-Za-z0-9._\- ]{2,24}$/;
 export const TRACK_ID_RE = /^trk-[0-9a-f]{8}$/;
 const MAX_DOCUMENT_CHARS = 420_000;
@@ -52,6 +55,11 @@ function usableLogo(value) {
   return typeof value === 'string' && value.length < 280_000 && LOGO_RE.test(value);
 }
 
+/*
+ * MIRRORS layoutFingerprint in WebFPVSimulator/src/share/listing.js. This is
+ * the copy that decides whether a republished course keeps its times. The
+ * hashes differ, the KEY LIST must not: field, elements, sequence.
+ */
 export function layoutHash(document) {
   const payload = {
     field: document.field ?? {},
@@ -161,6 +169,40 @@ export function planFromDocument(document) {
   };
 }
 
+/*
+ * How many GATES a course has, which is not how long its flying order is.
+ * A waypoint is an order pin with nothing standing on the field, and a
+ * marker only scores when it carries clearance, so counting steps put a
+ * number on the card that neither the plan's badges nor the simulator's own
+ * count agreed with. Mirrors the station rules in the simulator's
+ * src/game/trackdoc.js.
+ */
+function gateCount(document) {
+  const byId = new Map();
+  for (const el of document.elements || []) {
+    if (isObject(el) && typeof el.id === 'string' && el.id) {
+      byId.set(el.id, el);
+    }
+  }
+  let n = 0;
+  for (const step of document.sequence || []) {
+    if (!isObject(step)) {
+      continue;
+    }
+    const el = byId.get(step.elementId);
+    if (!el) {
+      continue;
+    }
+    const type = String(el.type || '');
+    if (PLAN_APERTURE.has(type)) {
+      n += 1;
+    } else if (Number(el.dims && el.dims.clearance) >= 0.05) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
 export function inspectDocument(raw) {
   if (typeof raw === 'string' && raw.length > MAX_DOCUMENT_CHARS) {
     return { error: 'That course is too large to publish.' };
@@ -188,8 +230,14 @@ export function inspectDocument(raw) {
     return { error: 'That course has no usable id.' };
   }
   const name = String(document.name || '').trim() || 'Untitled track';
+  /* The message named the field and then never looked at it, so a course
+   * with no field at all passed here and the board drew it on the 60 by 40
+   * default while the simulator flew it on whatever the document said. */
+  if (!isObject(document.field)) {
+    return { error: 'That course is missing its field.' };
+  }
   if (!Array.isArray(document.elements) || !Array.isArray(document.sequence)) {
-    return { error: 'That course is missing its field or its flying order.' };
+    return { error: 'That course is missing its elements or its flying order.' };
   }
   if (document.sequence.length < 1) {
     return { error: 'A published course needs at least one gate in the flying order.' };
@@ -214,7 +262,7 @@ export function inspectDocument(raw) {
     id,
     name: name.slice(0, 80),
     hasLogo: Boolean(logo),
-    gates: document.sequence.length,
+    gates: gateCount(document),
     elements: document.elements.length,
     layoutHash: layoutHash(document),
     plan: planFromDocument(document),

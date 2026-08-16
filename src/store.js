@@ -54,8 +54,25 @@ function livePlan(track) {
   return track && track.plan ? track.plan : { width: 60, depth: 40, marks: [], path: [] };
 }
 
+/*
+ * Fastest first, and the earliest post wins a tie. Written out three times
+ * in this file, and its SQL twins are the ORDER BY in PgStore.getTrack and
+ * the comparison in addTime's rank: all five have to agree or a lap is
+ * ranked one way in the list and another in the confirmation.
+ */
+function byLap(a, b) {
+  return a.lapMs - b.lapMs || String(a.postedUtc).localeCompare(String(b.postedUtc));
+}
+
+/* One 409, so the three publish paths cannot word it three ways. */
+const CONFLICT = {
+  error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
+  status: 409,
+  conflict: true,
+};
+
 function summaryOf(track, times) {
-  const ranked = [...times].sort((a, b) => a.lapMs - b.lapMs || a.postedUtc.localeCompare(b.postedUtc));
+  const ranked = [...times].sort(byLap);
   const best = ranked[0] || null;
   return {
     id: track.id,
@@ -131,7 +148,7 @@ class FileStore {
       return null;
     }
     const times = [...(this.data.times[id] || [])]
-      .sort((a, b) => a.lapMs - b.lapMs || a.postedUtc.localeCompare(b.postedUtc));
+      .sort(byLap);
     return { ...summaryOf(track, times), times };
   }
 
@@ -158,7 +175,7 @@ class FileStore {
     let timesCleared = false;
     if (existing) {
       if (!editKey || hashEditKey(editKey) !== existing.editKeyHash) {
-        return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
+        return { ...CONFLICT };
       }
       if (existing.layoutHash !== inspected.layoutHash) {
         this.data.times[inspected.id] = [];
@@ -217,7 +234,7 @@ class FileStore {
     list.push(row);
     this.data.times[trackId] = list;
     await this.flush();
-    const ranked = [...list].sort((a, b) => a.lapMs - b.lapMs || a.postedUtc.localeCompare(b.postedUtc));
+    const ranked = [...list].sort(byLap);
     const rank = ranked.findIndex((t) => t === row) + 1;
     return { name, lapMs, postedUtc: row.postedUtc, rank, times: ranked.length };
   }
@@ -266,7 +283,15 @@ class PgStore {
       'SELECT name, lap_ms AS "lapMs", posted_utc AS "postedUtc" FROM times WHERE track_id = $1 ORDER BY lap_ms ASC, posted_utc ASC',
       [id],
     );
-    return { ...rowToSummary(found.rows[0]), times: times.rows };
+    /* `best` too. The file store's getTrack returns it through summaryOf
+     * and the board's course sheet reads it, so leaving it out here made
+     * the same course render differently depending on the backend. */
+    const rows = times.rows;
+    return {
+      ...rowToSummary(found.rows[0]),
+      times: rows,
+      best: rows[0] ? { name: rows[0].name, lapMs: rows[0].lapMs } : null,
+    };
   }
 
   async getDocument(id) {
@@ -291,7 +316,7 @@ class PgStore {
         const row = existing.rows[0];
         if (!editKey || hashEditKey(editKey) !== row.edit_key_hash) {
           await client.query('ROLLBACK');
-          return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
+          return { ...CONFLICT };
         }
         if (row.layout_hash !== inspected.layoutHash) {
           await client.query('DELETE FROM times WHERE track_id = $1', [inspected.id]);
@@ -342,7 +367,7 @@ class PgStore {
         /* Connection may already be dead. */
       }
       if (e.code === '23505') {
-        return { error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.', status: 409, conflict: true };
+        return { ...CONFLICT };
       }
       throw e;
     } finally {
@@ -405,8 +430,16 @@ class PgStore {
   }
 }
 
+/*
+ * The Postgres row, in the shape summaryOf produces for the file store.
+ * The two are one contract with two writers, so anything added to one has
+ * to be added to the other: `best` was missing here for a while.
+ *
+ * `row.layout` used to be consulted here and there is no such column. The
+ * plan is always re-derived from the document, which is why the stored
+ * `plan` column is written and never read back.
+ */
 function rowToSummary(row) {
-  const layout = row.document || row.layout;
   return {
     id: row.id,
     name: row.name,
@@ -414,7 +447,7 @@ function rowToSummary(row) {
     gates: row.gates,
     elements: row.elements,
     hasLogo: row.has_logo,
-    plan: layout ? planFromDocument(layout) : row.plan,
+    plan: planFromDocument(row.document),
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,
   };

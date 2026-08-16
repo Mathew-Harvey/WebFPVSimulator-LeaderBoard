@@ -73,6 +73,39 @@ async function testValidate() {
   check('rejects an array lap', normaliseLapMs([1234]) == null);
   const ok = inspectDocument(sampleDoc());
   check('accepts a schema 1 course', !ok.error && ok.id === 'trk-1a2b3c4d' && ok.gates === 1);
+  /* The field is what the plan is drawn on. The old message named it and
+   * then never checked it. */
+  const noField = sampleDoc();
+  delete noField.field;
+  check('refuses a course with no field', Boolean(inspectDocument(noField).error));
+  /*
+   * gates is the count of things you FLY THROUGH, not the length of the
+   * flying order: a waypoint pins the line and nothing stands there. This
+   * is the number printed on the card beside the plan, and the plan's own
+   * badges come from the same rule in planFromDocument.
+   */
+  const withWaypoint = inspectDocument(sampleDoc('trk-1a2b3c4d', {
+    elements: [
+      { id: 'el-1', type: 'gate', position: { x: 0, y: 0, z: 0 }, yaw: 0, dims: { levels: 1 } },
+      { id: 'el-2', type: 'waypoint', position: { x: 5, y: 5, z: 0 }, yaw: 0, dims: {} },
+    ],
+    sequence: [{ elementId: 'el-1' }, { elementId: 'el-2' }],
+  }));
+  check('a waypoint in the order is not a gate', !withWaypoint.error && withWaypoint.gates === 1);
+  /*
+   * MIRROR CHECK. layoutHash decides whether a republished course keeps its
+   * times, and the simulator's layoutFingerprint predicts that answer so it
+   * can warn first. They hash differently on purpose; they must agree on
+   * which keys ARE the layout. If this list changes, change
+   * WebFPVSimulator/src/share/listing.js with it.
+   */
+  const layoutKeys = sampleDoc();
+  const movedGate = sampleDoc();
+  movedGate.elements = movedGate.elements.map((el) => ({ ...el, position: { ...el.position, x: 99 } }));
+  check('layoutHash follows elements', layoutHash(layoutKeys) !== layoutHash(movedGate));
+  const recoloured = sampleDoc();
+  recoloured.branding = { logo: null, logoName: 'ignored' };
+  check('layoutHash ignores branding', layoutHash(layoutKeys) === layoutHash(recoloured));
   check('refuses an empty flying order', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', { sequence: [] })).error));
   check('refuses a flying order that names nothing', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', {
     sequence: [{ id: 'seq-1', elementId: 'missing', apertureIndex: 0, entry: 1 }],

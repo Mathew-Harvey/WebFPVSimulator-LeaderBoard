@@ -46,6 +46,13 @@ const MIME = new Map([
 
 const store = await openStore();
 
+/*
+ * The board is public and every response is credential free: there is no
+ * cookie, no Authorization header and no session. Reflecting the request
+ * origin is therefore the same grant as '*', and it is written this way so
+ * that adding credentials later fails closed rather than silently sharing
+ * them with whoever asked.
+ */
 function cors(req, res) {
   const origin = req.headers.origin || '*';
   res.setHeader('access-control-allow-origin', origin);
@@ -108,9 +115,13 @@ async function readBody(req, limit = 500_000) {
   for await (const chunk of req) {
     size += chunk.length;
     if (size > limit) {
-      req.destroy();
-      const err = new Error('That request is too large.');
-      err.status = 400;
+      /* Pause, do not destroy. Killing the socket here meant the client saw
+       * a connection reset instead of the message, so an oversized publish
+       * looked like the board being down. The error path answers, and the
+       * request is left for Node to tear down after the response. */
+      req.pause();
+      const err = new Error('That course is too large to publish.');
+      err.status = 413;
       throw err;
     }
     chunks.push(chunk);
@@ -179,6 +190,12 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: e.message || 'That request was not JSON.' });
       return;
     }
+    /* 'null', '7' and '[]' all parse. Reading .author off them threw a
+     * TypeError that came back as a 500. */
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      send(res, 400, { error: 'That request was not a JSON object.' });
+      return;
+    }
     const author = normaliseName(body.author);
     if (!author) {
       send(res, 400, { error: 'A published course needs a name, two to twenty four letters, numbers, spaces, dots, underscores or hyphens.' });
@@ -209,6 +226,12 @@ async function handleApi(req, res, url) {
       body = JSON.parse(await readBody(req));
     } catch (e) {
       send(res, 400, { error: e.message || 'That request was not JSON.' });
+      return;
+    }
+    /* 'null', '7' and '[]' all parse. Reading .author off them threw a
+     * TypeError that came back as a 500. */
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      send(res, 400, { error: 'That request was not a JSON object.' });
       return;
     }
     const name = normaliseName(body.name);
@@ -294,7 +317,16 @@ const server = http.createServer(async (req, res) => {
     }
     await handleStatic(req, res, url);
   } catch (e) {
-    send(res, e.status || 500, { error: e.message || 'The board failed.' });
+    /* Only errors this code raised on purpose carry a status, and only
+     * those have a message meant for a stranger. Everything else is a
+     * stack from pg or the filesystem, and echoing it told the internet
+     * about the schema and the paths. */
+    if (e && e.status) {
+      send(res, e.status, { error: e.message });
+      return;
+    }
+    console.error(e);
+    send(res, 500, { error: 'The board failed.' });
   }
 });
 
