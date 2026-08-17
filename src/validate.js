@@ -52,7 +52,12 @@ function isObject(value) {
 const LOGO_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 
 function usableLogo(value) {
-  return typeof value === 'string' && value.length < 280_000 && LOGO_RE.test(value);
+  /* 256 KiB, the same cap as LOGO_MAX_CHARS in the simulator's
+   * src/trackbuilder/model.js, which is where an author actually hits it.
+   * This was 280_000, so a logo between the two sizes was refused by the
+   * builder and accepted here: the board would hold a course the tool that
+   * made it would not save. The tighter number is the real one. */
+  return typeof value === 'string' && value.length <= 256 * 1024 && LOGO_RE.test(value);
 }
 
 /*
