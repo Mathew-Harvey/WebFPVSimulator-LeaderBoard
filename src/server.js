@@ -4,7 +4,8 @@
  * A static page and a small JSON API. The page lists every published
  * course. Expanding one shows its times. Fly opens the simulator in
  * another tab with ?share=id, which is the only link the two sites
- * need. Publish and post-time are the writes.
+ * need. Publish and post-time are the writes. Testers also POST bug
+ * tickets here; agents GET them.
  *
  * This file is part of WebFPVLeaderboard.
  *
@@ -26,8 +27,12 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
-import { inspectDocument, normaliseLapMs, normaliseName, TRACK_ID_RE } from './validate.js';
+import {
+  inspectBugCreate, inspectBugPatch, inspectDocument, normaliseLapMs, normaliseName,
+  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, TRACK_ID_RE,
+} from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(root, 'public');
@@ -45,6 +50,8 @@ const MIME = new Map([
 ]);
 
 const store = await openStore();
+const bugsToken = String(process.env.BUGS_TOKEN || '');
+const bugHits = new Map();
 
 /*
  * The board is public and every response is credential free: there is no
@@ -57,7 +64,7 @@ function cors(req, res) {
   const origin = req.headers.origin || '*';
   res.setHeader('access-control-allow-origin', origin);
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-  res.setHeader('access-control-allow-headers', 'content-type');
+  res.setHeader('access-control-allow-headers', 'content-type, authorization');
   res.setHeader('vary', 'origin');
 }
 
@@ -107,6 +114,53 @@ function decodePathPart(raw) {
 function trackIdFrom(raw) {
   const id = decodePathPart(raw);
   return id && TRACK_ID_RE.test(id) ? id : null;
+}
+
+function bugIdFrom(raw) {
+  const id = decodePathPart(raw);
+  return id && BUG_ID_RE.test(id) ? id : null;
+}
+
+function sameSecret(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  if (left.length !== right.length || left.length === 0) {
+    return false;
+  }
+  return timingSafeEqual(left, right);
+}
+
+function bugsAuthorized(req, url) {
+  if (!bugsToken) {
+    return true;
+  }
+  const header = String(req.headers.authorization || '');
+  const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const query = url.searchParams.get('token') || '';
+  return sameSecret(bearer, bugsToken) || sameSecret(query, bugsToken);
+}
+
+function clientIp(req) {
+  if (process.env.BOARD_TRUST_PROXY === '1') {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (forwarded) {
+      return forwarded.slice(0, 80);
+    }
+  }
+  return req.socket && req.socket.remoteAddress ? String(req.socket.remoteAddress) : 'unknown';
+}
+
+function bugFlooded(ip) {
+  const now = Date.now();
+  const windowMs = 10 * 60 * 1000;
+  const hits = (bugHits.get(ip) || []).filter((t) => now - t < windowMs);
+  if (hits.length >= 8) {
+    bugHits.set(ip, hits);
+    return true;
+  }
+  hits.push(now);
+  bugHits.set(ip, hits);
+  return false;
 }
 
 async function readBody(req, limit = 500_000) {
@@ -262,6 +316,87 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === 'GET' && path === '/api/bugs') {
+    if (!bugsAuthorized(req, url)) {
+      send(res, 401, { error: 'A token is needed to read tickets.' });
+      return;
+    }
+    const status = url.searchParams.get('status');
+    const kind = url.searchParams.get('kind');
+    if (status && !BUG_STATUSES.includes(status)) {
+      send(res, 400, { error: 'Status is open, in_progress, fixed, wontfix or duplicate.' });
+      return;
+    }
+    if (kind && !BUG_KINDS.includes(kind)) {
+      send(res, 400, { error: 'Kind is crash, blocking, wrong, visual, feel or other.' });
+      return;
+    }
+    send(res, 200, { bugs: await store.listBugs({ status, kind, limit: url.searchParams.get('limit') }) });
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/bugs') {
+    if (bugFlooded(clientIp(req))) {
+      send(res, 429, { error: 'Too many reports from here. Try again in a few minutes.' });
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 40_000));
+    } catch (e) {
+      send(res, 400, { error: e.message || 'That request was not JSON.' });
+      return;
+    }
+    const inspected = inspectBugCreate(body);
+    if (inspected.error) {
+      send(res, 400, { error: inspected.error });
+      return;
+    }
+    send(res, 201, await store.addBug(inspected));
+    return;
+  }
+
+  const bugOne = path.match(/^\/api\/bugs\/([^/]+)$/);
+  if (bugOne && (req.method === 'GET' || req.method === 'POST')) {
+    if (!bugsAuthorized(req, url)) {
+      send(res, 401, { error: 'A token is needed to read or update tickets.' });
+      return;
+    }
+    const id = bugIdFrom(bugOne[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    if (req.method === 'GET') {
+      const ticket = await store.getBug(id);
+      if (!ticket) {
+        send(res, 404, { error: 'That ticket is not on the board.' });
+        return;
+      }
+      send(res, 200, ticket);
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 20_000));
+    } catch (e) {
+      send(res, 400, { error: e.message || 'That request was not JSON.' });
+      return;
+    }
+    const patch = inspectBugPatch(body);
+    if (patch.error) {
+      send(res, 400, { error: patch.error });
+      return;
+    }
+    const result = await store.updateBug(id, patch);
+    if (result.error) {
+      send(res, result.status || 400, { error: result.error });
+      return;
+    }
+    send(res, 200, result);
+    return;
+  }
+
   send(res, 404, { error: 'Nothing at that address.' });
 }
 
@@ -276,6 +411,9 @@ async function handleStatic(req, res, url) {
   let rel = normalize(decoded).replace(/^([/\\])+/, '');
   if (rel === '' || rel === '.') {
     rel = 'index.html';
+  }
+  if (rel === 'bugs') {
+    rel = 'bugs.html';
   }
   const root = resolve(publicDir);
   const path = resolve(root, rel);

@@ -1,0 +1,147 @@
+<!doctype html>
+<!--
+  Bug tickets. Testers file these from the simulator. This page is the
+  inbox: list, read, mark in progress or fixed. Agents can use the JSON
+  API instead; this is the human view of the same store.
+
+  This file is part of WebFPVLeaderboard.
+
+  WebFPVLeaderboard is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or (at
+  your option) any later version.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bug tickets, WebFPV</title>
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --cream: #f3ead4;
+        --sakura: #e8a8b8;
+        --amber: #ffd45c;
+        --mint: #7dffb4;
+        --slate: #9db3c8;
+        --deep: #141c16;
+        --panel: rgba(16, 22, 17, 0.86);
+        --line: rgba(244, 236, 214, 0.12);
+        --edge: rgba(232, 168, 184, 0.28);
+        --ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; min-height: 100%;
+        background: radial-gradient(120% 90% at 50% 6%, #1e2a20, #101610 60%) fixed;
+        color: var(--cream); font-family: var(--ui);
+      }
+      .chequer {
+        height: 8px;
+        background: repeating-linear-gradient(90deg, #23272f 0 14px, #eae6dd 14px 28px);
+      }
+      .wrap { width: min(1100px, 94vw); margin: 0 auto; padding: 28px 0 64px; }
+      .kicker {
+        font-size: 10px; font-weight: 700; letter-spacing: 0.18em;
+        text-transform: uppercase; color: var(--sakura);
+      }
+      h1 { margin: 8px 0 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: 0.06em; }
+      h1 .fpv { color: var(--sakura); }
+      .lede { max-width: 40em; color: var(--slate); line-height: 1.55; }
+      .bar {
+        display: flex; flex-wrap: wrap; gap: 10px; align-items: end;
+        margin: 22px 0 18px;
+      }
+      label { display: grid; gap: 6px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--slate); }
+      input, select, textarea {
+        background: #121a14; border: 1px solid var(--line); border-radius: 4px;
+        color: var(--cream); font: inherit; padding: 8px 10px; min-width: 12em;
+      }
+      textarea { min-width: 22em; min-height: 4.5em; width: min(100%, 36em); }
+      button {
+        appearance: none; border: 1px solid var(--line); background: transparent;
+        color: var(--slate); font: 600 13px/1.2 var(--ui); padding: 9px 14px;
+        border-radius: 3px; cursor: pointer;
+      }
+      button.primary { background: var(--mint); border-color: var(--mint); color: var(--deep); }
+      button:hover { color: var(--cream); border-color: var(--sakura); }
+      button.primary:hover { filter: brightness(1.06); color: var(--deep); }
+      .err { color: #ff8f8f; min-height: 1.3em; }
+      .layout { display: grid; grid-template-columns: minmax(240px, 340px) 1fr; gap: 18px; }
+      @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+      .list, .sheet {
+        background: var(--panel); border-radius: 4px; border-top: 2px solid var(--edge);
+        box-shadow: inset 0 0 0 1px var(--line);
+      }
+      .ticket {
+        display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+        background: transparent; border-radius: 0; padding: 12px 14px; color: var(--cream);
+      }
+      .ticket.on { background: rgba(232, 168, 184, 0.08); }
+      .ticket .id { font-family: var(--mono); font-size: 12px; color: var(--sakura); }
+      .ticket .title { margin-top: 4px; font-weight: 600; }
+      .ticket .meta { margin-top: 4px; font-size: 12px; color: var(--slate); }
+      .sheet { padding: 18px 20px 22px; min-height: 20em; }
+      .sheet h2 { margin: 8px 0 10px; font-size: 22px; }
+      .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      .badge {
+        font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+        padding: 4px 8px; border-radius: 3px; border: 1px solid var(--line); color: var(--slate);
+      }
+      .badge.open { color: var(--amber); border-color: var(--amber); }
+      .badge.in_progress { color: var(--sakura); border-color: var(--sakura); }
+      .badge.fixed { color: var(--mint); border-color: var(--mint); }
+      .block { margin: 14px 0; }
+      .block h3 {
+        margin: 0 0 6px; font-size: 11px; letter-spacing: 0.14em;
+        text-transform: uppercase; color: var(--slate); font-weight: 700;
+      }
+      .block p, .block pre {
+        margin: 0; white-space: pre-wrap; line-height: 1.5; font-family: inherit;
+      }
+      pre.ctx {
+        font-family: var(--mono); font-size: 12px; color: var(--slate);
+        background: #121a14; padding: 10px 12px; border-radius: 4px; overflow: auto;
+      }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+      a { color: var(--sakura); }
+      .empty { padding: 22px; color: var(--slate); }
+    </style>
+  </head>
+  <body>
+    <div class="chequer"></div>
+    <div class="wrap">
+      <div class="kicker">WebFPV</div>
+      <h1>Bug tickets</h1>
+      <p class="lede">
+        Testers file these from the simulator. This page lists them so you, or an agent,
+        can read one and mark it. Same data as <code>/api/bugs</code>.
+        <a href="/">Back to the board</a>.
+      </p>
+      <div class="bar">
+        <label>Status
+          <select id="status">
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="fixed">Fixed</option>
+            <option value="wontfix">Won't fix</option>
+            <option value="duplicate">Duplicate</option>
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>Token
+          <input id="token" type="password" autocomplete="off" placeholder="BUGS_TOKEN if set" />
+        </label>
+        <button class="primary" id="reload" type="button">Load</button>
+      </div>
+      <p class="err" id="err"></p>
+      <div class="layout">
+        <div class="list" id="list"><div class="empty">Load the list.</div></div>
+        <div class="sheet" id="sheet"><div class="empty">Pick a ticket.</div></div>
+      </div>
+    </div>
+    <script type="module" src="/bugs.js"></script>
+  </body>
+</html>

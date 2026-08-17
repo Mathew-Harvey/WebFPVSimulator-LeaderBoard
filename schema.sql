@@ -27,3 +27,24 @@ CREATE TABLE IF NOT EXISTS times (
 
 CREATE INDEX IF NOT EXISTS times_track_lap
   ON times (track_id, lap_ms, posted_utc);
+
+-- Tester tickets from the simulator. Additive: an existing database
+-- gains this table the next time the process starts, and nothing in
+-- tracks or times is rewritten.
+CREATE TABLE IF NOT EXISTS bugs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  what TEXT NOT NULL,
+  expected TEXT NOT NULL DEFAULT '',
+  steps TEXT NOT NULL DEFAULT '',
+  reporter TEXT NOT NULL,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  resolution TEXT NOT NULL DEFAULT '',
+  submitted_utc TIMESTAMPTZ NOT NULL,
+  updated_utc TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS bugs_status_submitted
+  ON bugs (status, submitted_utc DESC);

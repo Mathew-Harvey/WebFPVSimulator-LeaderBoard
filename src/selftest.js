@@ -10,14 +10,14 @@
  * your option) any later version.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
-  inspectDocument, layoutHash, normaliseLapMs, normaliseName,
+  inspectBugCreate, inspectBugPatch, inspectDocument, layoutHash, normaliseLapMs, normaliseName,
 } from './validate.js';
 import { openStore } from './store.js';
 
@@ -164,6 +164,30 @@ async function testValidate() {
     pinned.plan.marks.some((m) => m.type === 'flag' && m.seq === false));
   check('the start of the flying order is numbered 1',
     pinned.plan.numbers.length === 1 && pinned.plan.numbers[0].n === 1);
+  const bugOk = inspectBugCreate({
+    kind: 'visual',
+    title: 'Trees flicker at the shrine',
+    what: 'Flying past the shrine the treeline pops in and out every few frames.',
+    reporter: 'Ada Rook',
+    context: { map: 'city', screen: 'paused' },
+  });
+  check('accepts a real bug report', !bugOk.error && bugOk.reporter === 'Ada Rook' && bugOk.kind === 'visual');
+  check('blank reporter becomes Anonymous', inspectBugCreate({
+    kind: 'other',
+    title: 'A short enough title here',
+    what: 'Twenty characters at least in this description.',
+  }).reporter === 'Anonymous');
+  check('refuses a one word title', Boolean(inspectBugCreate({
+    kind: 'other', title: 'Short', what: 'Twenty characters at least in this description.',
+  }).error));
+  check('refuses an unknown kind', Boolean(inspectBugCreate({
+    kind: 'explode', title: 'A short enough title here', what: 'Twenty characters at least in this description.',
+  }).error));
+  check('refuses a symbol reporter', Boolean(inspectBugCreate({
+    kind: 'other', title: 'A short enough title here', what: 'Twenty characters at least in this description.', reporter: 'Ada!',
+  }).error));
+  check('accepts a status patch', inspectBugPatch({ status: 'fixed', resolution: 'Trees no longer pop.' }).status === 'fixed');
+  check('refuses a made up status', Boolean(inspectBugPatch({ status: 'maybe' }).error));
 }
 
 async function testStore() {
@@ -230,7 +254,36 @@ async function testStore() {
     && relist[0].plan.path[0].x === 20);
   const doc = await store.getDocument(inspected.id);
   check('the document is still there', doc.document.id === inspected.id);
+  const filed = await store.addBug(inspectBugCreate({
+    kind: 'feel',
+    title: 'Yaw feels late on the field',
+    what: 'A right yaw stick on the field map takes a beat before the quad turns.',
+    reporter: 'Ada Rook',
+    context: { map: 'field', screen: 'flight' },
+  }));
+  check('a filed bug has an id and is open', Boolean(filed.id) && /^bug-[0-9a-f]{8}$/.test(filed.id) && filed.status === 'open');
+  const listed = await store.listBugs({ status: 'open' });
+  check('the open list names the bug', listed.length === 1 && listed[0].id === filed.id && listed[0].title === filed.title);
+  const got = await store.getBug(filed.id);
+  check('the full ticket keeps what happened', got.what.includes('yaw stick') && got.context.map === 'field');
+  const marked = await store.updateBug(filed.id, { status: 'fixed', resolution: 'Checked rates. Not a sim bug.' });
+  check('an update marks the ticket fixed', marked.status === 'fixed' && marked.resolution.includes('rates'));
+  const stillOpen = await store.listBugs({ status: 'open' });
+  check('a fixed ticket leaves the open list', stillOpen.length === 0);
+  const missing = await store.updateBug('bug-00000000', { status: 'open' });
+  check('updating a missing ticket is a 404', missing.status === 404);
   await rm(dir, { recursive: true, force: true });
+
+  const legacyDir = await mkdtemp(join(tmpdir(), 'webfpv-board-legacy-'));
+  process.env.BOARD_FILE = join(legacyDir, 'board.json');
+  delete process.env.DATABASE_URL;
+  await writeFile(join(legacyDir, 'board.json'), JSON.stringify({ tracks: {}, times: {} }), 'utf8');
+  const legacy = await openStore();
+  const legacyBugs = await legacy.listBugs();
+  check('a board.json without bugs still lists an empty ticket list', Array.isArray(legacyBugs) && legacyBugs.length === 0);
+  const stillTracks = await legacy.listTracks();
+  check('a board.json without bugs still lists courses', Array.isArray(stillTracks) && stillTracks.length === 0);
+  await rm(legacyDir, { recursive: true, force: true });
 }
 
 function waitFor(child, needle, ms = 8000) {
@@ -323,6 +376,46 @@ async function testHttp() {
     check('encoded parent path cannot read the package', sneak.status !== 200 && !sneakText.includes('webfpvleaderboard'));
     const badPct = await fetch('http://127.0.0.1:3199/%');
     check('a malformed percent is not a 500', badPct.status === 400 || badPct.status === 404);
+    const filed = await fetch('http://127.0.0.1:3199/api/bugs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'visual',
+        title: 'City trees flicker at dusk',
+        what: 'Near the shrine the treeline pops in and out every few frames.',
+        expected: 'Trees stay put.',
+        steps: 'Load city. Fly to the shrine. Look at the treeline.',
+        reporter: 'Ada Rook',
+        context: { map: 'city', screen: 'paused', graphics: 'high' },
+      }),
+    });
+    const ticket = await filed.json();
+    check('file a bug over HTTP', filed.status === 201 && /^bug-[0-9a-f]{8}$/.test(ticket.id) && ticket.status === 'open');
+    const short = await fetch('http://127.0.0.1:3199/api/bugs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'other', title: 'Nope', what: 'Too short.' }),
+    });
+    check('a short bug title is refused', short.status === 400);
+    const listed = await fetch('http://127.0.0.1:3199/api/bugs?status=open').then((r) => r.json());
+    check('the open list includes the new ticket', listed.bugs.some((b) => b.id === ticket.id && b.map === 'city'));
+    const one = await fetch(`http://127.0.0.1:3199/api/bugs/${ticket.id}`).then((r) => r.json());
+    check('the full ticket keeps context', one.context.map === 'city' && one.what.includes('shrine'));
+    const patched = await fetch(`http://127.0.0.1:3199/api/bugs/${ticket.id}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    const patchedBody = await patched.json();
+    check('an agent can mark a ticket in progress', patched.status === 200 && patchedBody.status === 'in_progress');
+    const inbox = await fetch('http://127.0.0.1:3199/bugs.html').then((r) => r.text());
+    check('the inbox page is served', inbox.includes('Bug tickets') && inbox.includes('bugs.js'));
+    const inboxShort = await fetch('http://127.0.0.1:3199/bugs');
+    check('/bugs serves the inbox', inboxShort.status === 200 && (await inboxShort.text()).includes('Bug tickets'));
+    const proto = await fetch('http://127.0.0.1:3199/api/bugs/constructor');
+    check('a non-ticket id is not a 500', proto.status === 400 || proto.status === 404);
+    const stillBoard = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('filing a bug does not drop courses', stillBoard.tracks[0].id === 'trk-1a2b3c4d' && stillBoard.tracks[0].best.lapMs === 29110);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });

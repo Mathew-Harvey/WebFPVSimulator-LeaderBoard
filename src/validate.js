@@ -273,3 +273,117 @@ export function inspectDocument(raw) {
     plan: planFromDocument(document),
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Bug tickets                                                         */
+/* ------------------------------------------------------------------ */
+
+export const BUG_ID_RE = /^bug-[0-9a-f]{8}$/;
+export const BUG_KINDS = ['crash', 'blocking', 'wrong', 'visual', 'feel', 'other'];
+export const BUG_STATUSES = ['open', 'in_progress', 'fixed', 'wontfix', 'duplicate'];
+
+const BUG_TITLE_MIN = 8;
+const BUG_TITLE_MAX = 120;
+const BUG_WHAT_MIN = 20;
+const BUG_WHAT_MAX = 4000;
+const BUG_NOTE_MAX = 2000;
+const BUG_RESOLUTION_MAX = 4000;
+const BUG_CONTEXT_CHARS = 8000;
+const BUG_CONTEXT_KEYS = 24;
+
+function inspectContext(raw) {
+  if (raw == null || raw === '') {
+    return { context: {} };
+  }
+  if (!isObject(raw)) {
+    return { error: 'Context has to be a JSON object.' };
+  }
+  let packed;
+  try {
+    packed = JSON.stringify(raw);
+  } catch (e) {
+    return { error: 'Context is not usable JSON.' };
+  }
+  if (packed.length > BUG_CONTEXT_CHARS) {
+    return { error: 'That context is too large.' };
+  }
+  if (Object.keys(raw).length > BUG_CONTEXT_KEYS) {
+    return { error: 'That context has too many fields.' };
+  }
+  return { context: JSON.parse(packed) };
+}
+
+/*
+ * A tester's report, as the board will store it. Kind, title and what
+ * happened are required. The name can be blank, in which case it is stored
+ * as Anonymous. Context is whatever the simulator attached: map, GPU,
+ * browser. Agents read that so they do not have to ask.
+ */
+export function inspectBugCreate(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'That request was not a JSON object.' };
+  }
+  const kind = String(body.kind || 'other');
+  if (!BUG_KINDS.includes(kind)) {
+    return { error: 'Pick a kind: crash, blocking, wrong, visual, feel or other.' };
+  }
+  const title = String(body.title ?? '').replace(/\s+/g, ' ').trim();
+  if (title.length < BUG_TITLE_MIN || title.length > BUG_TITLE_MAX) {
+    return { error: 'A title needs eight to one hundred and twenty characters.' };
+  }
+  const what = String(body.what ?? '').replace(/\r\n/g, '\n').trim();
+  if (what.length < BUG_WHAT_MIN || what.length > BUG_WHAT_MAX) {
+    return { error: 'Say what happened, twenty to four thousand characters.' };
+  }
+  const expected = String(body.expected ?? '').replace(/\r\n/g, '\n').trim();
+  if (expected.length > BUG_NOTE_MAX) {
+    return { error: 'Expected result is too long.' };
+  }
+  const steps = String(body.steps ?? '').replace(/\r\n/g, '\n').trim();
+  if (steps.length > BUG_NOTE_MAX) {
+    return { error: 'Steps are too long.' };
+  }
+  const named = normaliseName(body.reporter);
+  const rawName = String(body.reporter ?? '').trim();
+  if (rawName && !named) {
+    return { error: 'A name is two to twenty four letters, numbers, spaces, dots, underscores or hyphens, or leave it blank.' };
+  }
+  const ctx = inspectContext(body.context);
+  if (ctx.error) {
+    return ctx;
+  }
+  return {
+    kind,
+    title,
+    what,
+    expected,
+    steps,
+    reporter: named || 'Anonymous',
+    context: ctx.context,
+  };
+}
+
+export function inspectBugPatch(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'That request was not a JSON object.' };
+  }
+  const out = {};
+  if (body.status != null) {
+    const status = String(body.status);
+    if (!BUG_STATUSES.includes(status)) {
+      return { error: 'Status is open, in_progress, fixed, wontfix or duplicate.' };
+    }
+    out.status = status;
+  }
+  if (body.resolution != null) {
+    const resolution = String(body.resolution).replace(/\r\n/g, '\n').trim();
+    if (resolution.length > BUG_RESOLUTION_MAX) {
+      return { error: 'That resolution is too long.' };
+    }
+    out.resolution = resolution;
+  }
+  if (out.status == null && out.resolution == null) {
+    return { error: 'Send a status or a resolution.' };
+  }
+  return out;
+}

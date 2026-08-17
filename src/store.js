@@ -34,6 +34,55 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function newBugId() {
+  return `bug-${randomBytes(4).toString('hex')}`;
+}
+
+function bugLimit(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) {
+    return 80;
+  }
+  return Math.min(Math.floor(n), 200);
+}
+
+function summaryBug(row) {
+  const context = row.context && typeof row.context === 'object' ? row.context : {};
+  return {
+    id: row.id,
+    status: row.status,
+    kind: row.kind,
+    title: row.title,
+    reporter: row.reporter,
+    map: context.map ? String(context.map) : '',
+    submittedUtc: row.submittedUtc,
+    updatedUtc: row.updatedUtc,
+  };
+}
+
+function fullBug(row) {
+  return {
+    ...summaryBug(row),
+    what: row.what,
+    expected: row.expected || '',
+    steps: row.steps || '',
+    context: row.context && typeof row.context === 'object' ? row.context : {},
+    resolution: row.resolution || '',
+  };
+}
+
+function listBugRows(rows, { status, kind, limit } = {}) {
+  let list = rows.slice();
+  if (status) {
+    list = list.filter((row) => row.status === status);
+  }
+  if (kind) {
+    list = list.filter((row) => row.kind === kind);
+  }
+  list.sort((a, b) => String(b.submittedUtc).localeCompare(String(a.submittedUtc)));
+  return list.slice(0, bugLimit(limit)).map(summaryBug);
+}
+
 async function writeAtomic(path, contents) {
   const tmp = `${path}.${process.pid}.tmp`;
   await writeFile(tmp, contents, 'utf8');
@@ -94,7 +143,7 @@ function summaryOf(track, times) {
 /* ------------------------------------------------------------------ */
 
 function emptyFile() {
-  return { tracks: {}, times: {} };
+  return { tracks: {}, times: {}, bugs: {} };
 }
 
 class FileStore {
@@ -121,6 +170,9 @@ class FileStore {
         return;
       }
       this.data = parsed;
+      if (!this.data.bugs || typeof this.data.bugs !== 'object' || Array.isArray(this.data.bugs)) {
+        this.data.bugs = {};
+      }
     } catch (e) {
       if (e.code === 'ENOENT') {
         this.data = emptyFile();
@@ -237,6 +289,67 @@ class FileStore {
     const ranked = [...list].sort(byLap);
     const rank = ranked.findIndex((t) => t === row) + 1;
     return { name, lapMs, postedUtc: row.postedUtc, rank, times: ranked.length };
+  }
+
+  async listBugs({ status, kind, limit } = {}) {
+    return listBugRows(Object.values(this.data.bugs || {}), { status, kind, limit });
+  }
+
+  async getBug(id) {
+    const row = this.data.bugs && this.data.bugs[id];
+    return row ? fullBug(row) : null;
+  }
+
+  async addBug(inspected) {
+    return this.lock(() => this.addBugUnlocked(inspected));
+  }
+
+  async addBugUnlocked(inspected) {
+    if (!this.data.bugs) {
+      this.data.bugs = {};
+    }
+    let id = newBugId();
+    while (this.data.bugs[id]) {
+      id = newBugId();
+    }
+    const submittedUtc = nowIso();
+    const row = {
+      id,
+      status: 'open',
+      kind: inspected.kind,
+      title: inspected.title,
+      what: inspected.what,
+      expected: inspected.expected,
+      steps: inspected.steps,
+      reporter: inspected.reporter,
+      context: inspected.context || {},
+      resolution: '',
+      submittedUtc,
+      updatedUtc: submittedUtc,
+    };
+    this.data.bugs[id] = row;
+    await this.flush();
+    return fullBug(row);
+  }
+
+  async updateBug(id, patch) {
+    return this.lock(() => this.updateBugUnlocked(id, patch));
+  }
+
+  async updateBugUnlocked(id, patch) {
+    const row = this.data.bugs && this.data.bugs[id];
+    if (!row) {
+      return { error: 'That ticket is not on the board.', status: 404 };
+    }
+    if (patch.status) {
+      row.status = patch.status;
+    }
+    if (patch.resolution != null) {
+      row.resolution = patch.resolution;
+    }
+    row.updatedUtc = nowIso();
+    await this.flush();
+    return fullBug(row);
   }
 }
 
@@ -417,6 +530,94 @@ class PgStore {
         rank: rankRow.rows[0].n,
         times: count.rows[0].n,
       };
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (ignored) {
+        /* Connection may already be dead. */
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listBugs({ status, kind, limit } = {}) {
+    const found = await this.pool.query(
+      `SELECT id, status, kind, title, reporter, context,
+              submitted_utc AS "submittedUtc", updated_utc AS "updatedUtc"
+       FROM bugs
+       WHERE ($1::text IS NULL OR status = $1)
+         AND ($2::text IS NULL OR kind = $2)
+       ORDER BY submitted_utc DESC
+       LIMIT $3`,
+      [status || null, kind || null, bugLimit(limit)],
+    );
+    return found.rows.map(summaryBug);
+  }
+
+  async getBug(id) {
+    const found = await this.pool.query(
+      `SELECT id, status, kind, title, what, expected, steps, reporter, context,
+              resolution, submitted_utc AS "submittedUtc", updated_utc AS "updatedUtc"
+       FROM bugs WHERE id = $1`,
+      [id],
+    );
+    return found.rowCount ? fullBug(found.rows[0]) : null;
+  }
+
+  async addBug(inspected) {
+    for (let i = 0; i < 6; i += 1) {
+      const id = newBugId();
+      try {
+        const inserted = await this.pool.query(
+          `INSERT INTO bugs (
+            id, status, kind, title, what, expected, steps, reporter, context,
+            resolution, submitted_utc, updated_utc
+          ) VALUES ($1,'open',$2,$3,$4,$5,$6,$7,$8,'',NOW(),NOW())
+          RETURNING id, status, kind, title, what, expected, steps, reporter, context,
+                    resolution, submitted_utc AS "submittedUtc", updated_utc AS "updatedUtc"`,
+          [
+            id, inspected.kind, inspected.title, inspected.what, inspected.expected,
+            inspected.steps, inspected.reporter, inspected.context || {},
+          ],
+        );
+        return fullBug(inserted.rows[0]);
+      } catch (e) {
+        if (e.code === '23505') {
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new Error('Could not allocate a ticket id.');
+  }
+
+  async updateBug(id, patch) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const found = await client.query(
+        `SELECT id, status, kind, title, what, expected, steps, reporter, context,
+                resolution, submitted_utc AS "submittedUtc", updated_utc AS "updatedUtc"
+         FROM bugs WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      if (!found.rowCount) {
+        await client.query('ROLLBACK');
+        return { error: 'That ticket is not on the board.', status: 404 };
+      }
+      const nextStatus = patch.status || found.rows[0].status;
+      const nextResolution = patch.resolution != null ? patch.resolution : found.rows[0].resolution;
+      const updated = await client.query(
+        `UPDATE bugs SET status = $2, resolution = $3, updated_utc = NOW()
+         WHERE id = $1
+         RETURNING id, status, kind, title, what, expected, steps, reporter, context,
+                   resolution, submitted_utc AS "submittedUtc", updated_utc AS "updatedUtc"`,
+        [id, nextStatus, nextResolution],
+      );
+      await client.query('COMMIT');
+      return fullBug(updated.rows[0]);
     } catch (e) {
       try {
         await client.query('ROLLBACK');

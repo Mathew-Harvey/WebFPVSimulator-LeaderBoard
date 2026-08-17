@@ -25,6 +25,10 @@ services:
       # cannot be told its own scheme by a client.
       - key: BOARD_TRUST_PROXY
         value: "1"
+      # Optional. When set, listing and updating tickets needs this token.
+      # Testers can still submit without it. Sync it from the Render dashboard.
+      - key: BUGS_TOKEN
+        sync: false
 
 databases:
   - name: webfpvleaderboard-db

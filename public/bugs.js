@@ -1,0 +1,232 @@
+/*
+ * bugs.js: the human inbox for tester tickets.
+ *
+ * This file is part of WebFPVLeaderboard.
+ *
+ * WebFPVLeaderboard is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at
+ * your option) any later version.
+ */
+
+const TOKEN_KEY = 'webfpv.bugs.token';
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) {
+    n.className = cls;
+  }
+  if (text != null) {
+    n.textContent = text;
+  }
+  return n;
+}
+
+function token() {
+  return document.getElementById('token').value.trim();
+}
+
+function headers() {
+  const t = token();
+  const h = { 'content-type': 'application/json' };
+  if (t) {
+    h.authorization = `Bearer ${t}`;
+  }
+  return h;
+}
+
+async function readJson(res) {
+  const text = await res.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch (e) {
+    body = null;
+  }
+  if (!res.ok) {
+    throw new Error((body && body.error) || text || `The board answered ${res.status}.`);
+  }
+  return body;
+}
+
+function when(iso) {
+  if (!iso) {
+    return '';
+  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return String(iso);
+  }
+  return d.toLocaleString();
+}
+
+const state = { bugs: [], current: null };
+
+function paintList() {
+  const host = document.getElementById('list');
+  host.textContent = '';
+  if (!state.bugs.length) {
+    host.append(el('div', 'empty', 'No tickets in this filter.'));
+    return;
+  }
+  for (const b of state.bugs) {
+    const row = el('button', state.current && state.current.id === b.id ? 'ticket on' : 'ticket');
+    row.type = 'button';
+    row.append(el('div', 'id', b.id));
+    row.append(el('div', 'title', b.title));
+    row.append(el('div', 'meta', `${b.kind} · ${b.reporter}${b.map ? ` · ${b.map}` : ''}`));
+    row.addEventListener('click', () => openTicket(b.id));
+    host.append(row);
+  }
+}
+
+function block(title, body) {
+  const wrap = el('div', 'block');
+  wrap.append(el('h3', null, title));
+  const p = el('p');
+  p.textContent = body || '(none)';
+  wrap.append(p);
+  return wrap;
+}
+
+function paintSheet() {
+  const host = document.getElementById('sheet');
+  host.textContent = '';
+  const t = state.current;
+  if (!t) {
+    host.append(el('div', 'empty', 'Pick a ticket.'));
+    return;
+  }
+  const badges = el('div', 'badges');
+  badges.append(el('span', `badge ${t.status}`, t.status.replace('_', ' ')));
+  badges.append(el('span', 'badge', t.kind));
+  if (t.map) {
+    badges.append(el('span', 'badge', t.map));
+  }
+  host.append(el('div', 'kicker', t.id));
+  host.append(el('h2', null, t.title));
+  host.append(badges);
+  host.append(el('p', 'meta', `${t.reporter} · ${when(t.submittedUtc)}`));
+  host.append(block('What happened', t.what));
+  host.append(block('Expected', t.expected));
+  host.append(block('Steps', t.steps));
+  host.append(block('Resolution', t.resolution));
+  const ctx = el('div', 'block');
+  ctx.append(el('h3', null, 'Context'));
+  const pre = el('pre', 'ctx', JSON.stringify(t.context || {}, null, 2));
+  ctx.append(pre);
+  host.append(ctx);
+  const resolution = document.createElement('textarea');
+  resolution.placeholder = 'What you did, for the next person.';
+  resolution.value = t.resolution || '';
+  const actions = el('div', 'actions');
+  const statuses = [
+    ['in_progress', 'In progress'],
+    ['fixed', 'Fixed'],
+    ['wontfix', "Won't fix"],
+    ['duplicate', 'Duplicate'],
+    ['open', 'Reopen'],
+  ];
+  for (const [id, label] of statuses) {
+    const b = el('button', id === 'fixed' ? 'primary' : '', label);
+    b.type = 'button';
+    b.addEventListener('click', () => saveTicket(id, resolution.value));
+    actions.append(b);
+  }
+  host.append(el('h3', null, 'Update'));
+  host.append(resolution);
+  host.append(actions);
+}
+
+async function loadList() {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  const status = document.getElementById('status').value;
+  try {
+    const qs = new URLSearchParams();
+    if (status) {
+      qs.set('status', status);
+    }
+    const res = await fetch(`/api/bugs?${qs.toString()}`, { headers: headers() });
+    const body = await readJson(res);
+    state.bugs = body.bugs || [];
+    if (state.current && !state.bugs.some((b) => b.id === state.current.id)) {
+      state.current = null;
+    }
+    paintList();
+    paintSheet();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    state.bugs = [];
+    paintList();
+  }
+}
+
+async function openTicket(id) {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  try {
+    const res = await fetch(`/api/bugs/${encodeURIComponent(id)}`, { headers: headers() });
+    state.current = await readJson(res);
+    paintList();
+    paintSheet();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+  }
+}
+
+async function saveTicket(status, resolution) {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  if (!state.current) {
+    return;
+  }
+  try {
+    const res = await fetch(`/api/bugs/${encodeURIComponent(state.current.id)}`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ status, resolution }),
+    });
+    state.current = await readJson(res);
+    await loadList();
+    paintSheet();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+  }
+}
+
+function restoreToken() {
+  try {
+    const stored = sessionStorage.getItem(TOKEN_KEY) || '';
+    if (stored) {
+      document.getElementById('token').value = stored;
+    }
+  } catch (e) {
+    /* Private mode. */
+  }
+}
+
+function rememberToken() {
+  try {
+    const value = token();
+    if (value) {
+      sessionStorage.setItem(TOKEN_KEY, value);
+    } else {
+      sessionStorage.removeItem(TOKEN_KEY);
+    }
+  } catch (e) {
+    /* Private mode. */
+  }
+}
+
+restoreToken();
+document.getElementById('reload').addEventListener('click', () => {
+  rememberToken();
+  loadList();
+});
+document.getElementById('status').addEventListener('change', () => {
+  rememberToken();
+  loadList();
+});
+document.getElementById('token').addEventListener('change', rememberToken);
+loadList();

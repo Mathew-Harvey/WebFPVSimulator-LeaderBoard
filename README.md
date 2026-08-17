@@ -79,11 +79,49 @@ instance. `render.yaml` is the blueprint.
 | POST | `/api/tracks` | Publish `{ author, document, editKey? }` |
 | POST | `/api/tracks/:id/times` | Post `{ name, lapMs }` |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
+| POST | `/api/bugs` | Tester submit `{ kind, title, what, expected?, steps?, reporter?, context? }` |
+| GET | `/api/bugs` | Ticket summaries, newest first. `?status=open` `?kind=visual` |
+| GET | `/api/bugs/:id` | One full ticket, context included |
+| POST | `/api/bugs/:id` | Update `{ status, resolution }` |
 
 A first publish returns an `editKey`. Keep it in the browser that sent
 the course. Publishing the same id again without that key is refused.
 Changing the flying layout clears the old times, because they were flown
 on a different course.
+
+## Bug tickets
+
+Testers click **Report a bug** in the simulator (or press F8). The form
+lands here. The inbox page is `/bugs`. Agents should use the JSON API.
+
+Kinds: `crash`, `blocking`, `wrong`, `visual`, `feel`, `other`.
+
+Statuses: `open`, `in_progress`, `fixed`, `wontfix`, `duplicate`.
+
+Submit is public. Listing and updating need `BUGS_TOKEN` when that
+environment variable is set. Locally it is unset, so the tests and a
+local agent can read tickets with no header.
+
+```bash
+# Open tickets, newest first
+curl http://127.0.0.1:3100/api/bugs?status=open
+
+# One ticket, including auto-captured map / GPU / browser
+curl http://127.0.0.1:3100/api/bugs/bug-xxxxxxxx
+
+# Claim it, then close it
+curl -X POST http://127.0.0.1:3100/api/bugs/bug-xxxxxxxx \
+  -H "content-type: application/json" \
+  -d "{\"status\":\"in_progress\"}"
+
+curl -X POST http://127.0.0.1:3100/api/bugs/bug-xxxxxxxx \
+  -H "content-type: application/json" \
+  -d "{\"status\":\"fixed\",\"resolution\":\"What you changed.\"}"
+```
+
+On a host with `BUGS_TOKEN` set, add
+`-H "Authorization: Bearer $BUGS_TOKEN"` to the GET and update calls.
+Testers never need that token.
 
 ## Licence
 
