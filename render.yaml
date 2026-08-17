@@ -11,10 +11,10 @@
 
 services:
   - type: web
-    name: webfpvleaderboard
+    name: webfpv-board
     runtime: node
     plan: free
-    region: oregon
+    region: singapore
 
     # ci, not install: package-lock.json is committed, and install is free to
     # quietly resolve a different pg than the one the tests ran against.
@@ -59,7 +59,7 @@ services:
 databases:
   - name: webfpvleaderboard-db
     plan: free
-    region: oregon
+    region: singapore
     postgresMajorVersion: "16"
 
     # Empty means Render's private network only, which is everything the
