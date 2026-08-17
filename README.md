@@ -60,14 +60,37 @@ DATABASE_URL=postgres://webfpv:webfpv@127.0.0.1:5432/webfpvleaderboard npm start
 
 ## Host on Render
 
-This repo is ready for a Render Web Service plus a Render Postgres
-instance. `render.yaml` is the blueprint.
+`render.yaml` here is a blueprint for a Node web service plus a Postgres
+instance, wired to each other. In the dashboard: **New**, **Blueprint**,
+pick this repo. That is both halves of the board.
 
-1. Create the service from this repo. Start command is `npm start`.
-2. Attach a Postgres database. Render sets `DATABASE_URL`.
-3. Set `SIM_ORIGIN` to wherever the simulator is hosted, no trailing slash.
-4. Optionally set `BOARD_PUBLIC_ORIGIN` to this service's public URL so
-   Fly links can post times back even behind a proxy.
+Then set one thing by hand, under the service's **Environment**:
+
+```
+SIM_ORIGIN = https://<the simulator's static site>
+```
+
+No trailing slash. Until it is set the board runs fine but its Fly and
+Build buttons point at `http://127.0.0.1:8000`.
+
+Two things about hosting here that are easy to get wrong:
+
+- **Postgres is not optional on Render.** The file store in `data/` is for
+  your machine. Render's filesystem is ephemeral, so that file is wiped on
+  every deploy and every restart, taking every course and every lap time
+  with it. Check `GET /api/health` says `"store":"postgres"`.
+- **The free Postgres instance is deleted after 30 days.** Not downgraded,
+  deleted. Move to a paid instance before then if the board is meant to
+  last, and check the current terms in the dashboard.
+
+`BOARD_TRUST_PROXY` is already set to `1` in the blueprint, which is what
+makes the board write `https://` Fly links from behind Render's TLS
+termination rather than `http://` ones a browser refuses as mixed content.
+Leave `BOARD_PUBLIC_ORIGIN` unset unless a custom domain confuses that.
+
+The full walkthrough, including the simulator's static site and the order
+to create things in, is in
+[DEPLOY.md in the simulator repo](https://github.com/Mathew-Harvey/WebFPVSimulator/blob/main/DEPLOY.md).
 
 ## API
 

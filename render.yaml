@@ -1,22 +1,47 @@
-# Render blueprint. Create a Web Service from this repo and a Postgres
-# instance, then set SIM_ORIGIN to wherever the simulator is hosted.
+# Render blueprint for the board: one Node web service and one Postgres.
+#
+# The simulator is a separate repo and a separate blueprint, a static site:
+# https://github.com/Mathew-Harvey/WebFPVSimulator
+# Deploy this one first, because the simulator has to be told this URL and
+# this service has to be told that one. See DEPLOY.md for the order.
+#
+# The region is written on both the service and the database and has to
+# match. DATABASE_URL below is Render's internal connection string, which
+# only resolves between resources in the same region.
 
 services:
   - type: web
     name: webfpvleaderboard
     runtime: node
     plan: free
-    buildCommand: npm install
+    region: oregon
+
+    # ci, not install: package-lock.json is committed, and install is free to
+    # quietly resolve a different pg than the one the tests ran against.
+    buildCommand: npm ci
     startCommand: npm start
+
+    # The board answers this before the store is touched, so a failing health
+    # check means the process is down rather than the database being empty.
+    healthCheckPath: /api/health
+
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: webfpvleaderboard-db
           property: connectionString
+
+      # Where the Fly and Build buttons send people: the simulator's static
+      # site, no trailing slash. Set in the dashboard once that site exists.
       - key: SIM_ORIGIN
         sync: false
+
+      # Public origin of THIS service, written into Fly links so the
+      # simulator knows where to post times back. Leave unset to use the
+      # incoming request origin, which BOARD_TRUST_PROXY below makes correct.
       - key: BOARD_PUBLIC_ORIGIN
         sync: false
+
       # Render terminates TLS in front of the app, so the request arrives
       # over plain http and only x-forwarded-proto knows it was https.
       # Without this the board writes http:// Fly links, which a browser on
@@ -25,6 +50,7 @@ services:
       # cannot be told its own scheme by a client.
       - key: BOARD_TRUST_PROXY
         value: "1"
+
       # Optional. When set, listing and updating tickets needs this token.
       # Testers can still submit without it. Sync it from the Render dashboard.
       - key: BUGS_TOKEN
@@ -33,3 +59,11 @@ services:
 databases:
   - name: webfpvleaderboard-db
     plan: free
+    region: oregon
+    postgresMajorVersion: "16"
+
+    # Empty means Render's private network only, which is everything the
+    # board needs. Open it in the dashboard, under the database's Access
+    # Control, when you want psql from a laptop; the external connection
+    # string Render hands you for that is a different one and carries SSL.
+    ipAllowList: []
