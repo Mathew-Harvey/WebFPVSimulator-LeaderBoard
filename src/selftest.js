@@ -42,10 +42,12 @@ function sampleDoc(id = 'trk-1a2b3c4d', extra = {}) {
     modifiedUtc: '2026-01-01T00:00:00Z',
     field: { width: 60, depth: 40, gridSize: 1 },
     settings: { tangentScale: 0.4, minCurveRadius: 2, samplesPerSegment: 24 },
-    branding: {
-      logo: extra.logo === undefined ? null : extra.logo,
-      logoName: extra.logoName || '',
-    },
+    branding: extra.logos
+      ? { logos: extra.logos }
+      : {
+        logo: extra.logo === undefined ? null : extra.logo,
+        logoName: extra.logoName || '',
+      },
     elements: extra.elements || [
       {
         id: 'el-1',
@@ -114,6 +116,59 @@ async function testValidate() {
   check('refuses an svg logo', Boolean(inspectDocument(sampleDoc('trk-1a2b3c4d', { logo: 'data:image/svg+xml;base64,PHN2Zy8+' })).error));
   const withLogo = inspectDocument(sampleDoc('trk-1a2b3c4d', { logo: 'data:image/png;base64,aaa' }));
   check('keeps an embedded logo', !withLogo.error && withLogo.hasLogo);
+
+  /*
+   * FIVE MARKS. A schemaVersion 2 course spells its branding as a list, and
+   * the board has to read both spellings: the old one, because courses
+   * published under it are already stored, and the new one, because that is
+   * what a current builder writes.
+   */
+  const png = (n) => `data:image/png;base64,${'a'.repeat(n)}`;
+  const marks = (count, size = 64) => Array.from({ length: count }, (unused, i) => ({
+    id: `logo-${i + 1}`, image: png(size), name: `m${i + 1}`,
+  }));
+  const v2 = sampleDoc('trk-1a2b3c4d', { logos: marks(5) });
+  v2.schemaVersion = 2;
+  const five = inspectDocument(v2);
+  check('accepts a schema 2 course with five marks', !five.error && five.logoCount === 5);
+  const v3 = sampleDoc('trk-1a2b3c4d');
+  v3.schemaVersion = 3;
+  check('refuses a schema 3 course', Boolean(inspectDocument(v3).error));
+  const six = sampleDoc('trk-1a2b3c4d', { logos: marks(6) });
+  six.schemaVersion = 2;
+  check('refuses a sixth mark', Boolean(inspectDocument(six).error));
+  const fat = sampleDoc('trk-1a2b3c4d', { logos: marks(3, 200 * 1024) });
+  fat.schemaVersion = 2;
+  check('refuses marks past the shared budget', Boolean(inspectDocument(fat).error));
+  const remoteInList = sampleDoc('trk-1a2b3c4d', {
+    logos: [{ id: 'logo-1', image: 'https://evil.example/x.png', name: 'x' }],
+  });
+  remoteInList.schemaVersion = 2;
+  check('refuses a remote mark in the list', Boolean(inspectDocument(remoteInList).error));
+
+  /*
+   * PAINT IS NOT LAYOUT. Selling a sponsor a place on a course that people
+   * have already flown must not clear the times on it, so a ground logo is
+   * filtered out of the layout hash. MIRRORS LAYOUT_SKIP in the simulator's
+   * src/share/listing.js: change one and change the other.
+   */
+  const painted = sampleDoc();
+  painted.elements = [...painted.elements, {
+    id: 'el-9',
+    type: 'groundLogo',
+    name: '',
+    position: { x: 30, y: 20, z: 0 },
+    yaw: 0,
+    pitch: 0,
+    yawOverridden: false,
+    logoId: 'logo-1',
+    dims: { width: 10, depth: 4 },
+  }];
+  check('layoutHash ignores paint on the grass', layoutHash(layoutKeys) === layoutHash(painted));
+  const paintedPlan = inspectDocument(painted);
+  check('a ground logo is not a gate', !paintedPlan.error && paintedPlan.gates === 1);
+  check('a ground logo is not drawn on the plan',
+    !paintedPlan.error && !paintedPlan.plan.marks.some((m) => m.type === 'groundLogo'));
   const a = layoutHash(sampleDoc());
   const b = layoutHash(sampleDoc('trk-1a2b3c4d', { name: 'Renamed' }));
   check('layout hash ignores the title', a === b);

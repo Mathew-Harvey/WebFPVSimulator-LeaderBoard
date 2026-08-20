@@ -30,7 +30,17 @@ import { createHash } from 'node:crypto';
  * before they upload. Two repos, so change both. */
 export const NAME_RE = /^[A-Za-z0-9._\- ]{2,24}$/;
 export const TRACK_ID_RE = /^trk-[0-9a-f]{8}$/;
-const MAX_DOCUMENT_CHARS = 420_000;
+/*
+ * 560_000, up from 420_000, and the number is derived rather than picked.
+ * A course carries up to five sponsors' marks now instead of one, sharing a
+ * 384 kB budget (BRANDING_MAX_CHARS in the simulator's
+ * src/trackbuilder/model.js). The old cap was one 256 kB mark plus about
+ * 158 kB of headroom for the course itself; this is the new branding budget
+ * plus the same headroom, so exactly as much room is left for gates as
+ * before. See also the publish body limit in server.js, which has to be
+ * above this or a course that fits is refused before it is read.
+ */
+const MAX_DOCUMENT_CHARS = 560_000;
 const MAX_LAP_MS = 3_600_000;
 
 export function normaliseName(raw) {
@@ -51,13 +61,62 @@ function isObject(value) {
 
 const LOGO_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 
+/* The three caps on a course's branding, all of them the simulator's, from
+ * LOGO_MAX_CHARS, LOGO_SLOTS and BRANDING_MAX_CHARS in its
+ * src/trackbuilder/model.js. They live there because that is where an author
+ * actually hits them; these copies exist so the board never holds a course
+ * the tool that made it would not save. An earlier copy of the first one was
+ * 280_000 rather than 256 KiB, and a logo between the two sizes was refused
+ * by the builder and accepted here. Change all three together. */
+const LOGO_MAX_CHARS = 256 * 1024;
+const LOGO_SLOTS = 5;
+const BRANDING_MAX_CHARS = 384 * 1024;
+
 function usableLogo(value) {
-  /* 256 KiB, the same cap as LOGO_MAX_CHARS in the simulator's
-   * src/trackbuilder/model.js, which is where an author actually hits it.
-   * This was 280_000, so a logo between the two sizes was refused by the
-   * builder and accepted here: the board would hold a course the tool that
-   * made it would not save. The tighter number is the real one. */
-  return typeof value === 'string' && value.length <= 256 * 1024 && LOGO_RE.test(value);
+  return typeof value === 'string' && value.length <= LOGO_MAX_CHARS && LOGO_RE.test(value);
+}
+
+/*
+ * The marks a course carries, whichever way its document spells them.
+ *
+ * A schemaVersion 1 document has one `branding.logo`; a version 2 one has
+ * `branding.logos`, a list of up to five { id, image, name }. Both are read,
+ * because the board holds courses published under the old spelling and they
+ * have to keep working when their author republishes an unchanged copy.
+ *
+ * Returns { images } or { error }. The board does not repair a document: it
+ * stores what it was given and the simulator is the reader that decides what
+ * a gate means, so anything wrong here is refused with a sentence rather
+ * than quietly dropped.
+ */
+function inspectBranding(document) {
+  const branding = document.branding;
+  if (branding == null) {
+    return { images: [] };
+  }
+  if (!isObject(branding)) {
+    return { error: 'That course\u2019s branding is not readable.' };
+  }
+  const raw = Array.isArray(branding.logos)
+    ? branding.logos
+    : (branding.logo != null && branding.logo !== '' ? [{ image: branding.logo }] : []);
+  if (raw.length > LOGO_SLOTS) {
+    return { error: `A course carries at most ${LOGO_SLOTS} marks.` };
+  }
+  const images = [];
+  let spent = 0;
+  for (const entry of raw) {
+    const image = typeof entry === 'string' ? entry : (isObject(entry) ? entry.image : null);
+    if (!usableLogo(image)) {
+      return { error: 'A mark has to travel inside the course as an embedded image.' };
+    }
+    spent += image.length;
+    images.push(image);
+  }
+  if (spent > BRANDING_MAX_CHARS) {
+    return { error: `A course\u2019s marks share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
+  }
+  return { images };
 }
 
 /*
@@ -65,10 +124,29 @@ function usableLogo(value) {
  * the copy that decides whether a republished course keeps its times. The
  * hashes differ, the KEY LIST must not: field, elements, sequence.
  */
+/*
+ * Element types that are painted on rather than flown through, so changing
+ * them cannot change a lap.
+ *
+ * THIS IS WHY A SPONSOR DOES NOT WIPE A LEADERBOARD. Selling a place on an
+ * existing course means adding a mark to a track people have already flown,
+ * and if that counted as a layout change every time on this board would be
+ * cleared the moment the deal was signed. Paint has no collider and is not
+ * in the flying order, so a lap flown before it was painted is the same lap.
+ *
+ * MIRRORS LAYOUT_SKIP in WebFPVSimulator/src/share/listing.js. Written out
+ * as a literal in both, rather than derived from the simulator's element
+ * library, because this repository has no element library and the two lists
+ * have to be edited together on purpose. A course with no painted marks
+ * hashes to exactly what it hashed to before this filter existed, which is
+ * what keeps every already published course's times.
+ */
+const LAYOUT_SKIP = new Set(['groundLogo']);
+
 export function layoutHash(document) {
   const payload = {
     field: document.field ?? {},
-    elements: document.elements ?? [],
+    elements: (document.elements ?? []).filter((el) => !(isObject(el) && LAYOUT_SKIP.has(el.type))),
     sequence: document.sequence ?? [],
   };
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
@@ -78,7 +156,11 @@ export function hashEditKey(key) {
   return createHash('sha256').update(String(key)).digest('hex');
 }
 
-const PLAN_SKIP = new Set(['label', 'waypoint']);
+/* Drawn as nothing on a plan card. A waypoint pins the flying order with
+ * nothing standing on the field, a label is an authoring note, and a ground
+ * logo is paint: all three drew as gates once, which is how a championship
+ * plan turned into a scatter of bars that are not on the course. */
+const PLAN_SKIP = new Set(['label', 'waypoint', 'groundLogo']);
 const PLAN_APERTURE = new Set([
   'gate', 'flaggedGate', 'doubleStack', 'flaggedDoubleStack', 'ladder', 'tower', 'diveGate',
 ]);
@@ -227,8 +309,14 @@ export function inspectDocument(raw) {
   if (!isObject(document)) {
     return { error: 'That course is not a track document.' };
   }
-  if (document.schemaVersion !== 1) {
-    return { error: 'This board only accepts schemaVersion 1 courses.' };
+  /*
+   * 1 and 2. Version 2 is where a course grew from one mark to five, which
+   * is a branding change and nothing else: field, elements and sequence read
+   * identically, so a version 1 course already on this board keeps its times
+   * when its author republishes it from a newer builder.
+   */
+  if (document.schemaVersion !== 1 && document.schemaVersion !== 2) {
+    return { error: 'This board accepts schemaVersion 1 and 2 courses.' };
   }
   const id = String(document.id || '');
   if (!TRACK_ID_RE.test(id)) {
@@ -258,15 +346,18 @@ export function inspectDocument(raw) {
       return { error: 'That flying order names a gate that is not in the course.' };
     }
   }
-  const logo = document.branding && document.branding.logo;
-  if (logo != null && !usableLogo(logo)) {
-    return { error: 'A logo has to travel inside the course as an embedded image.' };
+  const branding = inspectBranding(document);
+  if (branding.error) {
+    return { error: branding.error };
   }
   return {
     document,
     id,
     name: name.slice(0, 80),
-    hasLogo: Boolean(logo),
+    /* Whether the board's listing shows this course as branded. One mark or
+     * five, the card says the same thing, so the flag stays a boolean. */
+    hasLogo: branding.images.length > 0,
+    logoCount: branding.images.length,
     gates: gateCount(document),
     elements: document.elements.length,
     layoutHash: layoutHash(document),

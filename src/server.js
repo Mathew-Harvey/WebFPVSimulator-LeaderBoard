@@ -163,7 +163,17 @@ function bugFlooded(ip) {
   return false;
 }
 
-async function readBody(req, limit = 500_000) {
+/*
+ * 660_000, up from 500_000. The publish route is the only caller that takes
+ * the default, and what it carries is a document capped at MAX_DOCUMENT_CHARS
+ * in validate.js, which grew when a course went from one sponsor's mark to
+ * five. This has to stay above that cap plus the envelope the document
+ * travels in (author, edit key, JSON string escaping), or a course that
+ * validate.js would accept is refused here before anything reads it, and
+ * the message would blame its size rather than this number. The other two
+ * callers pass their own, much smaller, limits.
+ */
+async function readBody(req, limit = 660_000) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {

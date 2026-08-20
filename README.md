@@ -10,9 +10,12 @@ until you publish them. This page is the copy that other people can fly.
 
 ## How the three pages connect
 
-The track document from the builder is the only payload. The logo travels
-inside it, so a published course wears its sponsor print on every gate and
-every flag.
+The track document from the builder is the only payload. Up to five
+sponsors' marks travel inside it, so a published course wears its sponsor
+print on the gates, the upright banners, the flags and any footprint its
+author painted on the grass. A mark on the grass is dressing rather than
+layout, so adding a sponsor to a course people have already flown does not
+clear the times on it.
 
 ```
 Track builder                 This board                    Simulator
@@ -98,7 +101,7 @@ to create things in, is in
 | --- | --- | --- |
 | GET | `/api/tracks` | Every published course, with its best time |
 | GET | `/api/tracks/:id` | That course and its leaderboard |
-| GET | `/api/tracks/:id/document` | The full track document, logo included |
+| GET | `/api/tracks/:id/document` | The full track document, marks included |
 | POST | `/api/tracks` | Publish `{ author, document, editKey? }` |
 | POST | `/api/tracks/:id/times` | Post `{ name, lapMs }` |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
