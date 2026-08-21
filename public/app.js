@@ -40,6 +40,44 @@ import {
 } from './plan.js';
 
 /* ------------------------------------------------------------------ */
+/* Where this page lives                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The board is served from its own root on Render and from /board/ on
+ * webfpv.org, where a Cloudflare Worker takes the prefix off before the
+ * request reaches this service. The server therefore sees the same paths
+ * either way and needs no telling. The PAGE does: a fetch of '/api/tracks'
+ * from https://webfpv.org/board/ leaves the board's namespace entirely and
+ * asks the landing page for the courses.
+ *
+ * So every url this page builds for itself is resolved against the directory
+ * it was served from. `document.baseURI` is the document's own address, and
+ * './' against it is that address's directory, which is /board/ for both
+ * /board/ and /board/bugs and / for both / and /bugs. credits.js already
+ * resolved its logos this way and this is the same idea applied to the api.
+ */
+const HERE = new URL('./', document.baseURI);
+
+/*
+ * This page's own address INCLUDING the prefix it is mounted under, which is
+ * what the simulator needs in a ?board= to find its way back.
+ *
+ * This OUTRANKS the boardOrigin in /api/config, and that is the whole point.
+ * The server works its own address out of the request headers, and a header
+ * cannot carry a path: a host is a host. Behind the mount it answers
+ * https://webfpv.org, which is the landing page, so every Fly link would send
+ * a pilot somewhere that has never heard of a lap time, and nothing would say
+ * so out loud. The page is standing at the address in question and does not
+ * have to work anything out.
+ */
+const HERE_ORIGIN = HERE.href.replace(/\/+$/, '');
+
+function here(path) {
+  return new URL(path, HERE).href;
+}
+
+/* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -160,7 +198,16 @@ function remixHref(config, id) {
 }
 
 function orbitHref(config, id) {
-  const u = new URL('/src/share/orbit.html', config.simOrigin);
+  /*
+   * Relative, against simOrigin WITH a trailing slash. It was
+   * new URL('/src/share/orbit.html', config.simOrigin), and a leading slash
+   * throws away everything but the base's scheme and host: with the simulator
+   * at https://webfpv.org/sim that produced https://webfpv.org/src/share/...,
+   * which is the landing page, so every card on the board drew an empty box.
+   * The other two links below concatenate and were never affected, which is
+   * exactly why this one was easy to miss.
+   */
+  const u = new URL('src/share/orbit.html', `${config.simOrigin}/`);
   u.searchParams.set('map', 'custom');
   u.searchParams.set('share', id);
   u.searchParams.set('board', config.boardOrigin);
@@ -176,7 +223,7 @@ function courseHref(id) {
 /* ------------------------------------------------------------------ */
 
 const state = {
-  config: { simOrigin: 'http://127.0.0.1:8000', boardOrigin: window.location.origin },
+  config: { simOrigin: 'http://127.0.0.1:8000', boardOrigin: HERE_ORIGIN },
   courses: [],
   timesById: new Map(),
   query: '',
@@ -596,7 +643,7 @@ async function loadTimes(id) {
     return inflight.get(id);
   }
   const run = (async () => {
-    const res = await fetch(`/api/tracks/${encodeURIComponent(id)}`);
+    const res = await fetch(here(`api/tracks/${encodeURIComponent(id)}`));
     const detail = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(detail.error || 'Those times could not be loaded.');
@@ -1051,9 +1098,12 @@ async function start() {
   };
 
   try {
-    state.config = await getJson('/api/config');
+    /* simOrigin from the board, because only the board knows it. boardOrigin
+     * from this page, because only this page does. See HERE_ORIGIN above. */
+    const served = await getJson(here('api/config'));
+    state.config = { ...state.config, ...served, boardOrigin: HERE_ORIGIN };
     bindLinks(state.config);
-    const payload = await getJson('/api/tracks');
+    const payload = await getJson(here('api/tracks'));
     state.courses = payload.tracks || [];
   } catch (e) {
     list.textContent = '';
