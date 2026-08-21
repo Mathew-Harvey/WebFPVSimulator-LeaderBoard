@@ -166,7 +166,7 @@ function bugFlooded(ip) {
 /*
  * 660_000, up from 500_000. The publish route is the only caller that takes
  * the default, and what it carries is a document capped at MAX_DOCUMENT_CHARS
- * in validate.js, which grew when a course went from one sponsor's mark to
+ * in validate.js, which grew when a course went from one sponsor's logo to
  * five. This has to stay above that cap plus the envelope the document
  * travels in (author, edit key, JSON string escaping), or a course that
  * validate.js would accept is refused here before anything reads it, and

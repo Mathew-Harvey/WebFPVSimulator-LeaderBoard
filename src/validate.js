@@ -32,9 +32,9 @@ export const NAME_RE = /^[A-Za-z0-9._\- ]{2,24}$/;
 export const TRACK_ID_RE = /^trk-[0-9a-f]{8}$/;
 /*
  * 560_000, up from 420_000, and the number is derived rather than picked.
- * A course carries up to five sponsors' marks now instead of one, sharing a
+ * A course carries up to five sponsors' logos now instead of one, sharing a
  * 384 kB budget (BRANDING_MAX_CHARS in the simulator's
- * src/trackbuilder/model.js). The old cap was one 256 kB mark plus about
+ * src/trackbuilder/model.js). The old cap was one 256 kB logo plus about
  * 158 kB of headroom for the course itself; this is the new branding budget
  * plus the same headroom, so exactly as much room is left for gates as
  * before. See also the publish body limit in server.js, which has to be
@@ -77,7 +77,10 @@ function usableLogo(value) {
 }
 
 /*
- * The marks a course carries, whichever way its document spells them.
+ * The sponsor logos a course carries, whichever way its document spells
+ * them. Not to be confused with the plan's `marks`, which are the course's
+ * own geometry: the builder calls the pictures sponsor logos and so does
+ * every sentence the board shows an author.
  *
  * A schemaVersion 1 document has one `branding.logo`; a version 2 one has
  * `branding.logos`, a list of up to five { id, image, name }. Both are read,
@@ -101,20 +104,20 @@ function inspectBranding(document) {
     ? branding.logos
     : (branding.logo != null && branding.logo !== '' ? [{ image: branding.logo }] : []);
   if (raw.length > LOGO_SLOTS) {
-    return { error: `A course carries at most ${LOGO_SLOTS} marks.` };
+    return { error: `A course carries at most ${LOGO_SLOTS} sponsor logos.` };
   }
   const images = [];
   let spent = 0;
   for (const entry of raw) {
     const image = typeof entry === 'string' ? entry : (isObject(entry) ? entry.image : null);
     if (!usableLogo(image)) {
-      return { error: 'A mark has to travel inside the course as an embedded image.' };
+      return { error: 'A sponsor logo has to travel inside the course as an embedded image.' };
     }
     spent += image.length;
     images.push(image);
   }
   if (spent > BRANDING_MAX_CHARS) {
-    return { error: `A course\u2019s marks share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
+    return { error: `A course\u2019s sponsor logos share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
   }
   return { images };
 }
@@ -129,7 +132,7 @@ function inspectBranding(document) {
  * them cannot change a lap.
  *
  * THIS IS WHY A SPONSOR DOES NOT WIPE A LEADERBOARD. Selling a place on an
- * existing course means adding a mark to a track people have already flown,
+ * existing course means adding a logo to a track people have already flown,
  * and if that counted as a layout change every time on this board would be
  * cleared the moment the deal was signed. Paint has no collider and is not
  * in the flying order, so a lap flown before it was painted is the same lap.
@@ -137,7 +140,7 @@ function inspectBranding(document) {
  * MIRRORS LAYOUT_SKIP in WebFPVSimulator/src/share/listing.js. Written out
  * as a literal in both, rather than derived from the simulator's element
  * library, because this repository has no element library and the two lists
- * have to be edited together on purpose. A course with no painted marks
+ * have to be edited together on purpose. A course with no painted logos
  * hashes to exactly what it hashed to before this filter existed, which is
  * what keeps every already published course's times.
  */
@@ -310,7 +313,7 @@ export function inspectDocument(raw) {
     return { error: 'That course is not a track document.' };
   }
   /*
-   * 1 and 2. Version 2 is where a course grew from one mark to five, which
+   * 1 and 2. Version 2 is where a course grew from one logo to five, which
    * is a branding change and nothing else: field, elements and sequence read
    * identically, so a version 1 course already on this board keeps its times
    * when its author republishes it from a newer builder.
@@ -354,7 +357,7 @@ export function inspectDocument(raw) {
     document,
     id,
     name: name.slice(0, 80),
-    /* Whether the board's listing shows this course as branded. One mark or
+    /* Whether the board's listing shows this course as branded. One logo or
      * five, the card says the same thing, so the flag stays a boolean. */
     hasLogo: branding.images.length > 0,
     logoCount: branding.images.length,

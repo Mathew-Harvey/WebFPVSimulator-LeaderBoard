@@ -124,27 +124,27 @@ async function testValidate() {
    * what a current builder writes.
    */
   const png = (n) => `data:image/png;base64,${'a'.repeat(n)}`;
-  const marks = (count, size = 64) => Array.from({ length: count }, (unused, i) => ({
+  const logos = (count, size = 64) => Array.from({ length: count }, (unused, i) => ({
     id: `logo-${i + 1}`, image: png(size), name: `m${i + 1}`,
   }));
-  const v2 = sampleDoc('trk-1a2b3c4d', { logos: marks(5) });
+  const v2 = sampleDoc('trk-1a2b3c4d', { logos: logos(5) });
   v2.schemaVersion = 2;
   const five = inspectDocument(v2);
-  check('accepts a schema 2 course with five marks', !five.error && five.logoCount === 5);
+  check('accepts a schema 2 course with five logos', !five.error && five.logoCount === 5);
   const v3 = sampleDoc('trk-1a2b3c4d');
   v3.schemaVersion = 3;
   check('refuses a schema 3 course', Boolean(inspectDocument(v3).error));
-  const six = sampleDoc('trk-1a2b3c4d', { logos: marks(6) });
+  const six = sampleDoc('trk-1a2b3c4d', { logos: logos(6) });
   six.schemaVersion = 2;
-  check('refuses a sixth mark', Boolean(inspectDocument(six).error));
-  const fat = sampleDoc('trk-1a2b3c4d', { logos: marks(3, 200 * 1024) });
+  check('refuses a sixth logo', Boolean(inspectDocument(six).error));
+  const fat = sampleDoc('trk-1a2b3c4d', { logos: logos(3, 200 * 1024) });
   fat.schemaVersion = 2;
-  check('refuses marks past the shared budget', Boolean(inspectDocument(fat).error));
+  check('refuses logos past the shared budget', Boolean(inspectDocument(fat).error));
   const remoteInList = sampleDoc('trk-1a2b3c4d', {
     logos: [{ id: 'logo-1', image: 'https://evil.example/x.png', name: 'x' }],
   });
   remoteInList.schemaVersion = 2;
-  check('refuses a remote mark in the list', Boolean(inspectDocument(remoteInList).error));
+  check('refuses a remote logo in the list', Boolean(inspectDocument(remoteInList).error));
 
   /*
    * PAINT IS NOT LAYOUT. Selling a sponsor a place on a course that people
