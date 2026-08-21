@@ -70,7 +70,7 @@ pick this repo. That is both halves of the board.
 Then set one thing by hand, under the service's **Environment**:
 
 ```
-SIM_ORIGIN = https://<the simulator's static site>
+SIM_ORIGIN = https://<the simulator's static site>   # or https://webfpv.org/sim
 ```
 
 No trailing slash. Until it is set the board runs fine but its Fly and
@@ -89,7 +89,9 @@ Two things about hosting here that are easy to get wrong:
 `BOARD_TRUST_PROXY` is already set to `1` in the blueprint, which is what
 makes the board write `https://` Fly links from behind Render's TLS
 termination rather than `http://` ones a browser refuses as mixed content.
-Leave `BOARD_PUBLIC_ORIGIN` unset unless a custom domain confuses that.
+Leave `BOARD_PUBLIC_ORIGIN` unset unless a custom domain confuses that, or
+the board is mounted under a path such as `https://webfpv.org/board`, where a
+forwarded host cannot carry the path and this is the only way to say it.
 
 The full walkthrough, including the simulator's static site and the order
 to create things in, is in

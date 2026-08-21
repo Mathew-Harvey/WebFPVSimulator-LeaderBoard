@@ -418,6 +418,12 @@ async function testHttp() {
     check('author rename retitles the posted time', renamedTimes.author === 'Ada Two' && renamedTimes.times[0].name === 'Ada Two');
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
     check('the page is served', html.includes('The board') && html.includes('app.js'));
+    /* Relative, not root absolute. The board is served at its own root here
+     * and under /board/ on webfpv.org, and a leading slash on either of these
+     * asks the landing page for the board's script. The old assertion above
+     * matched both spellings, so it could not see the difference. */
+    check('the page loads its script relatively', html.includes('src="./app.js"'));
+    check('the page has no root absolute reference', !html.includes('src="/') && !html.includes('href="/'));
     check('the page does not load a webfont', !html.includes('fonts.googleapis.com'));
     const app = await fetch('http://127.0.0.1:3199/app.js').then((r) => r.text());
     const cardFn = app.slice(app.indexOf('function cardFor('));
@@ -481,6 +487,12 @@ async function testHttp() {
     check('an agent can mark a ticket in progress', patched.status === 200 && patchedBody.status === 'in_progress');
     const inbox = await fetch('http://127.0.0.1:3199/bugs.html').then((r) => r.text());
     check('the inbox page is served', inbox.includes('Bug tickets') && inbox.includes('bugs.js'));
+    check('the inbox loads its script relatively', inbox.includes('src="bugs.js"'));
+    check('the inbox has no root absolute reference', !inbox.includes('src="/') && !inbox.includes('href="/'));
+    const bugsJs = await fetch('http://127.0.0.1:3199/bugs.js').then((r) => r.text());
+    check('neither script fetches from the site root',
+      !app.includes("fetch('/") && !app.includes('fetch(`/')
+      && !bugsJs.includes("fetch('/") && !bugsJs.includes('fetch(`/'));
     const inboxShort = await fetch('http://127.0.0.1:3199/bugs');
     check('/bugs serves the inbox', inboxShort.status === 200 && (await inboxShort.text()).includes('Bug tickets'));
     const proto = await fetch('http://127.0.0.1:3199/api/bugs/constructor');

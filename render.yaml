@@ -31,14 +31,20 @@ services:
           name: webfpvleaderboard-db
           property: connectionString
 
-      # Where the Fly and Build buttons send people: the simulator's static
-      # site, no trailing slash. Set in the dashboard once that site exists.
+      # Where the Fly and Build buttons send people, no trailing slash. Set
+      # in the dashboard once the simulator exists. Every consumer treats it
+      # as a prefix and concatenates, so it may carry a mount path as well as
+      # a host: behind webfpv.org it is https://webfpv.org/sim.
       - key: SIM_ORIGIN
         sync: false
 
-      # Public origin of THIS service, written into Fly links so the
-      # simulator knows where to post times back. Leave unset to use the
-      # incoming request origin, which BOARD_TRUST_PROXY below makes correct.
+      # Public address of THIS service, written into /api/config. Leave unset
+      # when the board is the whole site: the request origin plus
+      # BOARD_TRUST_PROXY below is then correct. Behind a mount prefix it is
+      # not, because a forwarded host cannot carry a path, so set it to
+      # https://webfpv.org/board there. The board's page prefers its own
+      # document.baseURI over this either way, so a wrong value here no
+      # longer sends a pilot to the landing page; it only makes the JSON lie.
       - key: BOARD_PUBLIC_ORIGIN
         sync: false
 

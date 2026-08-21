@@ -22,6 +22,18 @@ function el(tag, cls, text) {
   return n;
 }
 
+/*
+ * Where this page lives. Same reason as app.js: the inbox is served at /bugs
+ * on Render and at /board/bugs on webfpv.org, and a fetch of '/api/bugs' from
+ * the second one leaves the board's namespace. './' against the document's own
+ * address is its directory, which is /board/ there and / here.
+ */
+const HERE = new URL('./', document.baseURI);
+
+function here(path) {
+  return new URL(path, HERE).href;
+}
+
 function token() {
   return document.getElementById('token').value.trim();
 }
@@ -147,7 +159,7 @@ async function loadList() {
     if (status) {
       qs.set('status', status);
     }
-    const res = await fetch(`/api/bugs?${qs.toString()}`, { headers: headers() });
+    const res = await fetch(here(`api/bugs?${qs.toString()}`), { headers: headers() });
     const body = await readJson(res);
     state.bugs = body.bugs || [];
     if (state.current && !state.bugs.some((b) => b.id === state.current.id)) {
@@ -166,7 +178,7 @@ async function openTicket(id) {
   const err = document.getElementById('err');
   err.textContent = '';
   try {
-    const res = await fetch(`/api/bugs/${encodeURIComponent(id)}`, { headers: headers() });
+    const res = await fetch(here(`api/bugs/${encodeURIComponent(id)}`), { headers: headers() });
     state.current = await readJson(res);
     paintList();
     paintSheet();
@@ -182,7 +194,7 @@ async function saveTicket(status, resolution) {
     return;
   }
   try {
-    const res = await fetch(`/api/bugs/${encodeURIComponent(state.current.id)}`, {
+    const res = await fetch(here(`api/bugs/${encodeURIComponent(state.current.id)}`), {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({ status, resolution }),
