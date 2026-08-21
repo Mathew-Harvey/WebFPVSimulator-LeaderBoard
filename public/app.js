@@ -149,6 +149,35 @@ function reduceMotion() {
 /* The two links between this site and the simulator                   */
 /* ------------------------------------------------------------------ */
 
+/*
+ * One board tab, one simulator tab.
+ *
+ * Every link that crossed to the simulator carried target="_blank", so a
+ * visitor who flew three courses off this board finished with three
+ * simulators open, each of them running a physics loop and holding a WebGL
+ * context. Naming the tab instead means the second course lands in the tab
+ * the first one is already using, and the browser focuses it.
+ *
+ * Two things this depends on, both easy to undo by accident:
+ *
+ *   No rel="noopener" on these links. The spec resolves a noopener link by
+ *   setting its target to "_blank" first, so a named link that also asks
+ *   for noopener opens a new tab every single time, which is the bug being
+ *   fixed here. The cost is that the simulator gets a cross origin
+ *   window.opener pointing back at this page. It is our own site at the
+ *   other end. A link that leaves the product keeps its noopener.
+ *
+ *   The names have to match src/share/windows.js in the simulator, which is
+ *   the copy of record and carries the long version of this comment. This
+ *   page cannot import from there, so the strings are written down twice.
+ *
+ * A modifier click still opens a new tab: the browser overrides the target
+ * when the visitor asks for that, which is the one case where a second
+ * simulator is what was wanted.
+ */
+const SIM_WINDOW = 'webfpv-sim';
+const BOARD_WINDOW = 'webfpv-board';
+
 function flyHref(config, id) {
   const board = encodeURIComponent(config.boardOrigin);
   return `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
@@ -307,9 +336,8 @@ function cardFor(track, config) {
   const actions = el('div', 'actions');
   const fly = el('a', 'btn primary small', 'Fly this course');
   fly.href = flyHref(config, track.id);
-  fly.target = '_blank';
-  fly.rel = 'noopener';
-  fly.setAttribute('aria-label', `Fly ${track.name}, opens the simulator in a new tab`);
+  fly.target = SIM_WINDOW;
+  fly.setAttribute('aria-label', `Fly ${track.name}, opens it in the simulator tab`);
   const more = el('a', 'text more');
   more.href = courseHref(track.id);
   more.textContent = track.times > 3 ? `All ${plural(track.times, 'time', 'times')}` : 'Course detail';
@@ -779,12 +807,12 @@ async function paintSheet(track) {
   actions.textContent = '';
   const fly = el('a', 'btn primary', 'Fly this course');
   fly.href = flyHref(state.config, track.id);
-  fly.target = '_blank';
-  fly.rel = 'noopener';
+  fly.target = SIM_WINDOW;
   const remix = el('a', 'text', 'Remix in the builder');
   remix.href = remixHref(state.config, track.id);
-  remix.target = '_blank';
-  remix.rel = 'noopener';
+  /* The builder is the simulator's tab, not a third one: the simulator
+   * navigates to the builder in place, so they share the name. */
+  remix.target = SIM_WINDOW;
   actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${courseHref(track.id)}`));
 
   const held = timesFor(track.id) || [];
@@ -912,10 +940,16 @@ function watchSpine() {
 function bindLinks(config) {
   const sim = `${config.simOrigin}/`;
   const builder = `${config.simOrigin}/src/trackbuilder/index.html`;
+  /* These four used to navigate this tab, which left the visitor with a
+   * simulator where the board had been and no way back but the back
+   * button. They go to the simulator's tab now, the same one Fly this
+   * course uses, so the board stays open behind it and a second click
+   * does not make a second simulator. */
   const set = (id, href) => {
     const n = byId(id);
     if (n) {
       n.href = href;
+      n.target = SIM_WINDOW;
     }
   };
   set('sim-link', sim);
@@ -1019,6 +1053,12 @@ function watchResize() {
 /* ------------------------------------------------------------------ */
 
 async function start() {
+  /* This tab is the board, and there is only ever one of it: the
+   * simulator's Leaderboard opens the board under this name, so a pilot
+   * who checks the times between runs comes back to this tab instead of
+   * stacking up another one. window.name survives navigation within this
+   * origin, so the bugs page and a course hash keep the claim. */
+  window.name = BOARD_WINDOW;
   watchSpine();
   watchOrbit();
   watchKeys();
@@ -1069,6 +1109,7 @@ async function start() {
     box.append(el('p', null, 'Build a course in the track builder, set a flying order, and publish it. The board starts when the first course lands.'));
     const build = el('a', 'btn primary', 'Build a course');
     build.href = `${state.config.simOrigin}/src/trackbuilder/index.html`;
+    build.target = SIM_WINDOW;
     box.append(build);
     notice.append(box);
     return;

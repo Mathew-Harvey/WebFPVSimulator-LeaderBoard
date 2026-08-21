@@ -1146,9 +1146,17 @@
           <div><dt>Times</dt><dd id="stat-times">0</dd></div>
           <div><dt>Pilots</dt><dd id="stat-pilots">0</dd></div>
         </dl>
+        <!-- target="webfpv-sim" on every link that crosses to the
+             simulator: one simulator tab, reused, rather than one per
+             click. app.js sets the same target when it binds the real
+             origins; it is written here too so it still holds if the
+             config request fails and these fallback hrefs are what the
+             visitor clicks. Do not add rel="noopener", which would send
+             each click to a fresh tab. See src/share/windows.js in the
+             simulator. -->
         <nav class="links">
-          <a class="btn" id="builder-link" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
-          <a class="text" id="sim-link" href="http://127.0.0.1:8000/">Open the simulator</a>
+          <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
           <a class="text" href="#credits">Credits</a>
         </nav>
       </div>
@@ -1160,7 +1168,7 @@
         <span class="spine-mark">WEB<span class="fpv">FPV</span></span>
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
-          <a class="text" id="spine-build" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
           <a class="text" href="#credits">Credits</a>
         </nav>
       </div>
@@ -1204,7 +1212,7 @@
         publish it. Free software under GPLv3.
       </p>
       <nav>
-        <a id="foot-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
+        <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
         <a href="#credits">Credits</a>
       </nav>
     </footer>

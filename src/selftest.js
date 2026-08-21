@@ -426,6 +426,22 @@ async function testHttp() {
     check('a course card is attached before its times are painted', attach !== -1 && paint !== -1 && attach < paint);
     const cfg = await fetch('http://127.0.0.1:3199/api/config').then((r) => r.json());
     check('config names the simulator', cfg.simOrigin === 'http://127.0.0.1:8000');
+    /*
+     * One simulator tab. A named target is the whole mechanism, and a
+     * rel="noopener" sitting beside it undoes it in silence: the spec
+     * rewrites a noopener target to "_blank" before looking the name up,
+     * so the link opens a fresh simulator on every click and the page
+     * looks correct while doing it. Both halves are asserted, on the
+     * fallback anchors in the page and on the links app.js builds.
+     */
+    const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
+    check('every fallback link to the simulator names the simulator tab',
+      simAnchors.length === 4 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
+    check('the links app.js builds name the simulator tab',
+      app.includes("const SIM_WINDOW = 'webfpv-sim'")
+      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 5);
+    check('nothing app.js builds opens a bare new tab or asks for noopener',
+      !app.includes("'_blank'") && !app.includes("noopener'"));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
     const sneakText = await sneak.text();
     check('encoded parent path cannot read the package', sneak.status !== 200 && !sneakText.includes('webfpvleaderboard'));
