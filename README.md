@@ -102,10 +102,11 @@ to create things in, is in
 | Method | Path | What it does |
 | --- | --- | --- |
 | GET | `/api/tracks` | Every published course, with its best time |
-| GET | `/api/tracks/:id` | That course and its leaderboard |
+| GET | `/api/tracks/:id` | That course and its leaderboard. Each time carries `{ id, hasGhost }` |
 | GET | `/api/tracks/:id/document` | The full track document, marks included |
 | POST | `/api/tracks` | Publish `{ author, document, editKey? }` |
-| POST | `/api/tracks/:id/times` | Post `{ name, lapMs }` |
+| POST | `/api/tracks/:id/times` | Post `{ name, lapMs, ghost? }` |
+| GET | `/api/tracks/:id/times/:timeId/ghost` | That time's recorded lap, `{ id, name, lapMs, ghost }` |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
 | POST | `/api/bugs` | Tester submit `{ kind, title, what, expected?, steps?, reporter?, context? }` |
 | GET | `/api/bugs` | Ticket summaries, newest first. `?status=open` `?kind=visual` |
@@ -116,6 +117,13 @@ A first publish returns an `editKey`. Keep it in the browser that sent
 the course. Publishing the same id again without that key is refused.
 Changing the flying layout clears the old times, because they were flown
 on a different course.
+
+`ghost` is the simulator's recorded lap, base64 of the wire format in its
+`src/share/ghostdata.js`, attached when the lap was flown in the session
+that posts it. The board validates the header against that format,
+mirrored in `src/validate.js`, and refuses a blob that does not match the
+lap time beside it. Times posted with a ghost show a mint chase link on
+the board, and the simulator's Ghost row lists them as rivals.
 
 ## Bug tickets
 

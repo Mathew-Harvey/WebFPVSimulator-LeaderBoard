@@ -74,6 +74,15 @@ function when(iso) {
 
 const state = { bugs: [], current: null };
 
+/*
+ * A feel report is feedback, not a defect, and the inbox says so. Every
+ * other kind reads as itself; only feel gets renamed, because "feel" on a
+ * list row reads like a typo where "feedback" reads like what it is.
+ */
+function kindLabel(kind) {
+  return kind === 'feel' ? 'feedback' : kind;
+}
+
 function paintList() {
   const host = document.getElementById('list');
   host.textContent = '';
@@ -86,7 +95,10 @@ function paintList() {
     row.type = 'button';
     row.append(el('div', 'id', b.id));
     row.append(el('div', 'title', b.title));
-    row.append(el('div', 'meta', `${b.kind} · ${b.reporter}${b.map ? ` · ${b.map}` : ''}`));
+    const meta = el('div', 'meta');
+    meta.append(el('span', b.kind === 'feel' ? 'kind feel' : 'kind', kindLabel(b.kind)));
+    meta.append(document.createTextNode(` · ${b.reporter}${b.map ? ` · ${b.map}` : ''}`));
+    row.append(meta);
     row.addEventListener('click', () => openTicket(b.id));
     host.append(row);
   }
@@ -111,7 +123,7 @@ function paintSheet() {
   }
   const badges = el('div', 'badges');
   badges.append(el('span', `badge ${t.status}`, t.status.replace('_', ' ')));
-  badges.append(el('span', 'badge', t.kind));
+  badges.append(el('span', t.kind === 'feel' ? 'badge feel' : 'badge', kindLabel(t.kind)));
   if (t.map) {
     badges.append(el('span', 'badge', t.map));
   }
@@ -154,10 +166,14 @@ async function loadList() {
   const err = document.getElementById('err');
   err.textContent = '';
   const status = document.getElementById('status').value;
+  const kind = document.getElementById('kind').value;
   try {
     const qs = new URLSearchParams();
     if (status) {
       qs.set('status', status);
+    }
+    if (kind) {
+      qs.set('kind', kind);
     }
     const res = await fetch(here(`api/bugs?${qs.toString()}`), { headers: headers() });
     const body = await readJson(res);
@@ -237,6 +253,10 @@ document.getElementById('reload').addEventListener('click', () => {
   loadList();
 });
 document.getElementById('status').addEventListener('change', () => {
+  rememberToken();
+  loadList();
+});
+document.getElementById('kind').addEventListener('change', () => {
   rememberToken();
   loadList();
 });

@@ -30,8 +30,8 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, normaliseLapMs, normaliseName,
-  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, TRACK_ID_RE,
+  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, normaliseLapMs, normaliseName,
+  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -121,6 +121,11 @@ function bugIdFrom(raw) {
   return id && BUG_ID_RE.test(id) ? id : null;
 }
 
+function timeIdFrom(raw) {
+  const id = decodePathPart(raw);
+  return id && TIME_ID_RE.test(id) ? id : null;
+}
+
 function sameSecret(a, b) {
   const left = Buffer.from(String(a));
   const right = Buffer.from(String(b));
@@ -150,17 +155,36 @@ function clientIp(req) {
   return req.socket && req.socket.remoteAddress ? String(req.socket.remoteAddress) : 'unknown';
 }
 
+/*
+ * The bug flood gate, in two halves so a REJECTED report does not spend the
+ * allowance: the check runs before the body is read, the record only after
+ * validation passes. In one piece, eight malformed attempts (an over-long
+ * title, say) locked a tester out for ten minutes without a single ticket
+ * landing. Spam of invalid posts stays free, and stays harmless: it stores
+ * nothing.
+ */
 function bugFlooded(ip) {
   const now = Date.now();
   const windowMs = 10 * 60 * 1000;
-  const hits = (bugHits.get(ip) || []).filter((t) => now - t < windowMs);
-  if (hits.length >= 8) {
-    bugHits.set(ip, hits);
-    return true;
+  /* The map used to keep every IP that ever posted, forever; a stale entry
+   * was only dropped when that same IP came back. Sweep the whole map once
+   * it grows, which on this board's traffic is almost never. */
+  if (bugHits.size > 256) {
+    for (const [who, times] of bugHits) {
+      if (!times.some((t) => now - t < windowMs)) {
+        bugHits.delete(who);
+      }
+    }
   }
-  hits.push(now);
+  const hits = (bugHits.get(ip) || []).filter((t) => now - t < windowMs);
   bugHits.set(ip, hits);
-  return false;
+  return hits.length >= 8;
+}
+
+function recordBugHit(ip) {
+  const hits = bugHits.get(ip) || [];
+  hits.push(Date.now());
+  bugHits.set(ip, hits);
 }
 
 /*
@@ -172,8 +196,12 @@ function bugFlooded(ip) {
  * validate.js would accept is refused here before anything reads it, and
  * the message would blame its size rather than this number. The other two
  * callers pass their own, much smaller, limits.
+ *
+ * tooBig is the message for THIS route's payload. It used to be hardcoded
+ * to the publish wording, so a tester whose bug context ran long was told
+ * their course was too large to publish, from a form with no course in it.
  */
-async function readBody(req, limit = 660_000) {
+async function readBody(req, limit = 660_000, tooBig = 'That course is too large to publish.') {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -184,7 +212,7 @@ async function readBody(req, limit = 660_000) {
        * looked like the board being down. The error path answers, and the
        * request is left for Node to tear down after the response. */
       req.pause();
-      const err = new Error('That course is too large to publish.');
+      const err = new Error(tooBig);
       err.status = 413;
       throw err;
     }
@@ -251,6 +279,12 @@ async function handleApi(req, res, url) {
     try {
       body = JSON.parse(await readBody(req));
     } catch (e) {
+      /* An oversize body carries its own status and its own message; only
+       * a JSON parse failure is this route's 400. Swallowing the status
+       * here used to turn every 413 into a 400. */
+      if (e && e.status) {
+        throw e;
+      }
       send(res, 400, { error: e.message || 'That request was not JSON.' });
       return;
     }
@@ -287,8 +321,11 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && times) {
     let body;
     try {
-      body = JSON.parse(await readBody(req));
+      body = JSON.parse(await readBody(req, 660_000, 'That time is too large to post.'));
     } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
       send(res, 400, { error: e.message || 'That request was not JSON.' });
       return;
     }
@@ -308,6 +345,14 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: 'That lap time is not usable.' });
       return;
     }
+    /* The ghost is optional and refused loudly when malformed rather than
+     * silently dropped: the simulator proves its own encoding before it
+     * sends, so a bad blob here is a bug someone needs to hear about. */
+    const ghost = inspectGhost(body.ghost, lapMs);
+    if (ghost.error) {
+      send(res, 400, { error: ghost.error });
+      return;
+    }
     const trackId = trackIdFrom(times[1]);
     if (!trackId) {
       send(res, 400, { error: 'That address is not usable.' });
@@ -317,12 +362,34 @@ async function handleApi(req, res, url) {
       trackId,
       name,
       lapMs,
+      ghost: ghost.ghost,
     });
     if (result.error) {
       send(res, result.status || 400, { error: result.error });
       return;
     }
     send(res, 201, result);
+    return;
+  }
+
+  const ghostPath = path.match(/^\/api\/tracks\/([^/]+)\/times\/([^/]+)\/ghost$/);
+  if (req.method === 'GET' && ghostPath) {
+    const trackId = trackIdFrom(ghostPath[1]);
+    const timeId = timeIdFrom(ghostPath[2]);
+    if (!trackId || !timeId) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const row = await store.getGhost(trackId, timeId);
+    if (!row) {
+      send(res, 404, { error: 'That time is not on the board.' });
+      return;
+    }
+    if (!row.ghost) {
+      send(res, 404, { error: 'That time was posted without a ghost.' });
+      return;
+    }
+    send(res, 200, row);
     return;
   }
 
@@ -346,14 +413,18 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && path === '/api/bugs') {
-    if (bugFlooded(clientIp(req))) {
+    const ip = clientIp(req);
+    if (bugFlooded(ip)) {
       send(res, 429, { error: 'Too many reports from here. Try again in a few minutes.' });
       return;
     }
     let body;
     try {
-      body = JSON.parse(await readBody(req, 40_000));
+      body = JSON.parse(await readBody(req, 40_000, 'That report is too large.'));
     } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
       send(res, 400, { error: e.message || 'That request was not JSON.' });
       return;
     }
@@ -362,6 +433,7 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: inspected.error });
       return;
     }
+    recordBugHit(ip);
     send(res, 201, await store.addBug(inspected));
     return;
   }
@@ -388,8 +460,11 @@ async function handleApi(req, res, url) {
     }
     let body;
     try {
-      body = JSON.parse(await readBody(req, 20_000));
+      body = JSON.parse(await readBody(req, 20_000, 'That update is too large.'));
     } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
       send(res, 400, { error: e.message || 'That request was not JSON.' });
       return;
     }

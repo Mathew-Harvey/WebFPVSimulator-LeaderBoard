@@ -17,16 +17,33 @@ CREATE TABLE IF NOT EXISTS tracks (
   updated_utc TIMESTAMPTZ NOT NULL
 );
 
+-- public_id is the handle a time is addressed by over the API, minted by
+-- the store like a bug id, because the BIGSERIAL is a storage detail and
+-- the file store has no serial to match it with. ghost is the simulator's
+-- recorded lap for that time, base64 of the format in the simulator's
+-- src/share/ghostdata.js, and null on a time posted without one.
 CREATE TABLE IF NOT EXISTS times (
   id BIGSERIAL PRIMARY KEY,
   track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  public_id TEXT,
   name TEXT NOT NULL,
   lap_ms INTEGER NOT NULL,
+  ghost TEXT,
   posted_utc TIMESTAMPTZ NOT NULL
 );
 
+-- Additive migration for a database from before ghosts. CREATE TABLE IF
+-- NOT EXISTS above does nothing on an existing table, so the two columns
+-- are added here as well; rows from before carry null in both, which the
+-- API reads as "no ghost to fetch".
+ALTER TABLE times ADD COLUMN IF NOT EXISTS public_id TEXT;
+ALTER TABLE times ADD COLUMN IF NOT EXISTS ghost TEXT;
+
 CREATE INDEX IF NOT EXISTS times_track_lap
   ON times (track_id, lap_ms, posted_utc);
+
+CREATE UNIQUE INDEX IF NOT EXISTS times_public_id
+  ON times (public_id);
 
 -- Tester tickets from the simulator. Additive: an existing database
 -- gains this table the next time the process starts, and nothing in

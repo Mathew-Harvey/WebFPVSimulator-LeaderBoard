@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
  * before they upload. Two repos, so change both. */
 export const NAME_RE = /^[A-Za-z0-9._\- ]{2,24}$/;
 export const TRACK_ID_RE = /^trk-[0-9a-f]{8}$/;
+export const TIME_ID_RE = /^tm-[0-9a-f]{8}$/;
 /*
  * 560_000, up from 420_000, and the number is derived rather than picked.
  * A course carries up to five sponsors' logos now instead of one, sharing a
@@ -57,6 +58,95 @@ export function normaliseLapMs(raw) {
 
 function isObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/* ------------------------------------------------------------------ */
+/* Ghost laps                                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * MIRRORS the wire format in WebFPVSimulator/src/share/ghostdata.js, the
+ * same arrangement as NAME_RE above: the simulator's module is the copy of
+ * record and encodes; this is the board's own reading of the header so it
+ * never stores a blob the simulator could not replay. Two repos, so a
+ * format change lands in both.
+ *
+ * The caps are the simulator's: 30 Hz grid, ten minutes of lap, 20 bytes a
+ * sample. The largest legitimate blob is therefore ~360 KB of bytes, which
+ * is ~480 KB of base64; the character cap sits just above that and well
+ * under the route's body limit.
+ */
+const GHOST_MAGIC = 'FPVGHST1';
+const GHOST_VERSION = 1;
+const GHOST_HEADER_BYTES = 32;
+const GHOST_SAMPLE_BYTES = 20;
+const GHOST_MAX_MS = 600_000;
+const GHOST_MAX_SPLITS = 256;
+export const GHOST_MAX_CHARS = 500_000;
+/* How far the blob's own duration may sit from the lap time it was posted
+ * with. The simulator writes the same rounded number to both, so anything
+ * past rounding slack is a blob for a different lap. */
+const GHOST_LAP_SLACK_MS = 250;
+
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/*
+ * A posted ghost, judged: { ghost } with the base64 exactly as it will be
+ * stored, or { error } with the reason. lapMs is the already-normalised
+ * lap the ghost arrived beside.
+ */
+export function inspectGhost(raw, lapMs) {
+  if (raw == null || raw === '') {
+    return { ghost: null };
+  }
+  if (typeof raw !== 'string') {
+    return { error: 'A ghost has to be a base64 string.' };
+  }
+  if (raw.length > GHOST_MAX_CHARS) {
+    return { error: 'That ghost recording is too large.' };
+  }
+  if (raw.length < 44 || raw.length % 4 !== 0 || !BASE64_RE.test(raw)) {
+    return { error: 'That ghost recording is not usable base64.' };
+  }
+  const bytes = Buffer.from(raw, 'base64');
+  if (bytes.length < GHOST_HEADER_BYTES) {
+    return { error: 'That ghost recording is shorter than its header.' };
+  }
+  if (bytes.toString('latin1', 0, 8) !== GHOST_MAGIC) {
+    return { error: 'That ghost recording is not in the ghost format.' };
+  }
+  if (bytes.readUInt32LE(8) !== GHOST_VERSION) {
+    return { error: 'That ghost recording is from an unknown format version.' };
+  }
+  const rateHz = bytes.readUInt32LE(12);
+  const count = bytes.readUInt32LE(16);
+  const durationMs = bytes.readUInt32LE(20);
+  const splitCount = bytes.readUInt32LE(24);
+  if (rateHz < 1 || rateHz > 240) {
+    return { error: 'That ghost recording claims an unusable sample rate.' };
+  }
+  if (count < 2) {
+    return { error: 'That ghost recording is too short to replay.' };
+  }
+  if (durationMs < 1 || durationMs > GHOST_MAX_MS) {
+    return { error: 'That ghost recording claims an unusable duration.' };
+  }
+  if (splitCount > GHOST_MAX_SPLITS) {
+    return { error: 'That ghost recording claims too many splits.' };
+  }
+  const want = GHOST_HEADER_BYTES + splitCount * 4 + count * GHOST_SAMPLE_BYTES;
+  if (bytes.length !== want) {
+    return { error: 'That ghost recording does not match its own header.' };
+  }
+  /* The grid has to reach the finish, or replay near the line reads air. */
+  const stepMs = 1000 / rateHz;
+  if (((count - 1) * 1000) / rateHz + stepMs < durationMs) {
+    return { error: 'That ghost recording ends before its lap does.' };
+  }
+  if (lapMs != null && Math.abs(durationMs - lapMs) > GHOST_LAP_SLACK_MS) {
+    return { error: 'That ghost recording does not match the lap time beside it.' };
+  }
+  return { ghost: raw };
 }
 
 const LOGO_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
@@ -383,7 +473,15 @@ const BUG_WHAT_MAX = 4000;
 const BUG_NOTE_MAX = 2000;
 const BUG_RESOLUTION_MAX = 4000;
 const BUG_CONTEXT_CHARS = 8000;
-const BUG_CONTEXT_KEYS = 24;
+/*
+ * 32, up from 24. The simulator's feel reports already attach twenty top
+ * level keys (feelSnapshot in its src/ui/ui.js spreads bugSnapshot and adds
+ * five of its own), so 24 left four keys of headroom before feedback
+ * started bouncing with "too many fields", and the client has no check of
+ * its own. The character cap above is still the real bound on size; this
+ * one only exists to stop a pathological object of thousands of tiny keys.
+ */
+const BUG_CONTEXT_KEYS = 32;
 
 function inspectContext(raw) {
   if (raw == null || raw === '') {

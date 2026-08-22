@@ -216,9 +216,23 @@ function reduceMotion() {
 const SIM_WINDOW = 'webfpv-sim';
 const BOARD_WINDOW = 'webfpv-board';
 
-function flyHref(config, id) {
+function flyHref(config, id, ghostId) {
   const board = encodeURIComponent(config.boardOrigin);
-  return `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
+  const base = `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
+  /* A ghost id turns the link into a chase: the simulator fetches that
+   * lap's recording and flies it beside the visitor as a translucent
+   * pacer. Only times posted with a recording carry one. */
+  return ghostId ? `${base}&ghost=${encodeURIComponent(ghostId)}` : base;
+}
+
+/* The little mint link that races a recorded lap. One builder, because the
+ * podium and the sheet's table must not drift apart on what a chase is. */
+function chaseLink(config, trackId, row) {
+  const a = el('a', 'chase', 'chase');
+  a.href = flyHref(config, trackId, row.id);
+  a.target = SIM_WINDOW;
+  a.title = `Fly against ${row.name}'s recorded lap`;
+  return a;
 }
 
 function remixHref(config, id) {
@@ -438,11 +452,16 @@ function paintPodium(card, times) {
   if (!ranked) {
     return;
   }
+  const config = state.config;
   times.slice(0, 3).forEach((row, i) => {
     const li = el('li', `podium-row r${i + 1}`);
     li.append(el('span', 'rk', String(i + 1)));
     li.append(el('span', 'nm', row.name));
     li.append(timeNode(row.lapMs, 'tm'));
+    if (row.hasGhost && row.id) {
+      li.classList.add('has-chase');
+      li.append(chaseLink(config, card.dataset.id, row));
+    }
     podium.append(li);
   });
   if (more) {
@@ -756,7 +775,7 @@ function paintBoard(host, track, times) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  for (const [cls, label] of [['rank', ''], ['nm', 'Pilot'], ['time', 'Time'], ['gap', 'Gap'], ['when', 'Posted']]) {
+  for (const [cls, label] of [['rank', ''], ['nm', 'Pilot'], ['time', 'Time'], ['gap', 'Gap'], ['when', 'Posted'], ['chase', '']]) {
     headRow.append(el('th', cls, label));
   }
   thead.append(headRow);
@@ -789,6 +808,14 @@ function paintBoard(host, track, times) {
     const when = el('td', 'when', formatAgo(row.postedUtc));
     when.title = formatWhen(row.postedUtc);
     tr.append(when);
+
+    /* Times posted with a recorded lap can be chased in the simulator; the
+     * rest hold an empty cell so the columns stay put. */
+    const chase = el('td', 'chase');
+    if (row.hasGhost && row.id) {
+      chase.append(chaseLink(state.config, track.id, row));
+    }
+    tr.append(chase);
     body.append(tr);
   });
   table.append(body);

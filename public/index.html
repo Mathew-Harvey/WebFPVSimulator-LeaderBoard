@@ -631,6 +631,19 @@
       .podium-row .tm { color: var(--cream); font-size: 13px; }
       .podium-row.r1 .rk, .podium-row.r1 .tm { color: var(--mint); }
       .podium-row.r2 .rk, .podium-row.r3 .rk { color: var(--sakura); }
+      /* The chase link, on rows whose time carries a recorded lap. Mint,
+         because a ghost is a record flying. Rows without one keep the three
+         column grid, so the times stay on one right edge. */
+      .podium-row.has-chase { grid-template-columns: 1.5em minmax(0, 1fr) auto auto; }
+      .podium-row .chase, td.chase a {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--mint);
+        text-decoration: none;
+      }
+      .podium-row .chase:hover, td.chase a:hover { color: var(--cream); }
 
       .none {
         margin: 0;
@@ -956,8 +969,9 @@
       }
       th:first-child, td:first-child { padding-left: 0; }
       th:last-child, td:last-child { padding-right: 0; }
-      th.time, th.gap, th.when,
-      td.time, td.gap, td.when { text-align: right; }
+      th.time, th.gap, th.when, th.chase,
+      td.time, td.gap, td.when, td.chase { text-align: right; }
+      td.chase { width: 4.5em; }
       td.rank {
         font-family: var(--mono);
         font-weight: 700;
@@ -1241,6 +1255,7 @@
       </p>
       <nav>
         <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
+        <a href="bugs.html">Bugs and feedback</a>
         <a href="#credits">Credits</a>
       </nav>
     </footer>

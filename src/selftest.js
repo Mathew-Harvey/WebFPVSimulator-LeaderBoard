@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, layoutHash, normaliseLapMs, normaliseName,
+  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
 } from './validate.js';
 import { openStore } from './store.js';
 
@@ -62,6 +62,42 @@ function sampleDoc(id = 'trk-1a2b3c4d', extra = {}) {
     ],
     sequence: extra.sequence || [{ id: 'seq-1', elementId: 'el-1', apertureIndex: 0, entry: 1 }],
   };
+}
+
+/*
+ * A well formed ghost blob, built by hand. MIRRORS the wire format in the
+ * simulator's src/share/ghostdata.js the same way inspectGhost does: header,
+ * splits, then 20 byte samples. The overrides exist to build the malformed
+ * blobs the inspector must refuse.
+ */
+function makeGhostB64(durationMs, {
+  rateHz = 30, splits = null, magic = 'FPVGHST1', version = 1, trimBytes = 0,
+} = {}) {
+  const count = Math.floor((durationMs * rateHz) / 1000) + 2;
+  const splitList = splits ?? [durationMs];
+  const bytes = Buffer.alloc(32 + splitList.length * 4 + count * 20);
+  bytes.write(magic, 0, 'latin1');
+  bytes.writeUInt32LE(version, 8);
+  bytes.writeUInt32LE(rateHz, 12);
+  bytes.writeUInt32LE(count, 16);
+  bytes.writeUInt32LE(durationMs, 20);
+  bytes.writeUInt32LE(splitList.length, 24);
+  let at = 32;
+  for (const s of splitList) {
+    bytes.writeUInt32LE(s, at);
+    at += 4;
+  }
+  for (let i = 0; i < count; i += 1) {
+    bytes.writeFloatLE(i * 0.4, at);
+    bytes.writeFloatLE(3, at + 4);
+    bytes.writeFloatLE(0, at + 8);
+    bytes.writeInt16LE(0, at + 12);
+    bytes.writeInt16LE(0, at + 14);
+    bytes.writeInt16LE(0, at + 16);
+    bytes.writeInt16LE(32767, at + 18);
+    at += 20;
+  }
+  return bytes.subarray(0, bytes.length - trimBytes).toString('base64');
 }
 
 async function testValidate() {
@@ -243,6 +279,31 @@ async function testValidate() {
   }).error));
   check('accepts a status patch', inspectBugPatch({ status: 'fixed', resolution: 'Trees no longer pop.' }).status === 'fixed');
   check('refuses a made up status', Boolean(inspectBugPatch({ status: 'maybe' }).error));
+  /* Feel reports carry a wide context: twenty keys today, and the cap has
+   * to keep headroom over that or feedback bounces with "too many fields". */
+  const wide = {};
+  for (let i = 0; i < 32; i += 1) {
+    wide[`k${i}`] = i;
+  }
+  check('a thirty two key context is accepted', !inspectBugCreate({
+    kind: 'feel', title: 'Flight feel: about right', what: 'The quad felt about right this run, no complaints.', context: wide,
+  }).error);
+  wide.k32 = 32;
+  check('a thirty three key context is refused', Boolean(inspectBugCreate({
+    kind: 'feel', title: 'Flight feel: about right', what: 'The quad felt about right this run, no complaints.', context: wide,
+  }).error));
+
+  const ghostB64 = makeGhostB64(29110);
+  check('accepts a well formed ghost', inspectGhost(ghostB64, 29110).ghost === ghostB64);
+  check('an absent ghost is not an error', inspectGhost(null, 29110).ghost === null && inspectGhost('', 29110).ghost === null);
+  check('refuses a ghost that is not a string', Boolean(inspectGhost(42, 29110).error));
+  check('refuses a ghost that is not base64', Boolean(inspectGhost('not*base64!!'.repeat(8), 29110).error));
+  check('refuses a ghost with the wrong magic', Boolean(inspectGhost(makeGhostB64(29110, { magic: 'NOTGHOST' }), 29110).error));
+  check('refuses a ghost from another format version', Boolean(inspectGhost(makeGhostB64(29110, { version: 3 }), 29110).error));
+  check('refuses a ghost whose bytes disagree with its header', Boolean(inspectGhost(makeGhostB64(29110, { trimBytes: 20 }), 29110).error));
+  check('refuses a ghost that does not match the lap beside it', Boolean(inspectGhost(ghostB64, 35000).error));
+  check('refuses a ghost past the size cap', Boolean(inspectGhost('A'.repeat(500_004), 1000).error));
+  check('refuses a ghost claiming an hour of lap', Boolean(inspectGhost(makeGhostB64(3_000_000, { rateHz: 1 }), 3_000_000).error));
 }
 
 async function testStore() {
@@ -295,6 +356,23 @@ async function testStore() {
   ]);
   const afterParallel = await store.getTrack(inspected.id);
   check('parallel posts both land', afterParallel.times.length === 4);
+  const ghostBlob = makeGhostB64(47000);
+  const ghosted = await store.addTime({
+    trackId: inspected.id, name: 'Ev', lapMs: 47000, ghost: ghostBlob,
+  });
+  check('a posted time gets a public id', /^tm-[0-9a-f]{8}$/.test(String(ghosted.id)));
+  const withGhost = await store.getTrack(inspected.id);
+  const evRow = withGhost.times.find((t) => t.name === 'Ev');
+  check('the list marks the ghost and keeps the blob out of it', Boolean(evRow) && evRow.hasGhost === true && !('ghost' in evRow));
+  check('times posted without a ghost read hasGhost false', withGhost.times.filter((t) => t.name !== 'Ev').every((t) => t.hasGhost === false));
+  const fetchedGhost = await store.getGhost(inspected.id, ghosted.id);
+  check('the ghost comes back whole', Boolean(fetchedGhost) && fetchedGhost.ghost === ghostBlob && fetchedGhost.lapMs === 47000);
+  check('an unknown time id has no ghost row', (await store.getGhost(inspected.id, 'tm-00000000')) === null);
+  /* A row written before ghosts existed: no id, no ghost key at all. It
+   * has to list cleanly, not crash the mapper. */
+  store.data.times[inspected.id].push({ name: 'Old Row', lapMs: 60000, postedUtc: '2026-01-01T00:00:00.000Z' });
+  const legacyRow = (await store.getTrack(inspected.id)).times.find((t) => t.name === 'Old Row');
+  check('a time from before ghosts lists with a null id and no ghost', Boolean(legacyRow) && legacyRow.id === null && legacyRow.hasGhost === false);
   const list = await store.listTracks();
   check('the list names the author', list[0].author === 'Ada Rook' && list[0].best.lapMs === 33400);
   store.data.tracks[inspected.id].plan = {
@@ -416,6 +494,37 @@ async function testHttp() {
     check('author rename over HTTP', reauthor.status === 200 && reauthorBody.updated === true && reauthorBody.timesCleared !== true);
     const renamedTimes = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d').then((r) => r.json());
     check('author rename retitles the posted time', renamedTimes.author === 'Ada Two' && renamedTimes.times[0].name === 'Ada Two');
+    const ghostWire = makeGhostB64(31500);
+    const ghostPost = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bo', lapMs: 31500, ghost: ghostWire }),
+    });
+    const ghostPosted = await ghostPost.json();
+    check('post a time with a ghost over HTTP', ghostPost.status === 201 && /^tm-[0-9a-f]{8}$/.test(String(ghostPosted.id)));
+    const ghostList = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d').then((r) => r.json());
+    const boRow = ghostList.times.find((t) => t.name === 'Bo');
+    check('the track lists the ghost without carrying it', Boolean(boRow) && boRow.hasGhost === true && boRow.ghost === undefined);
+    const ghostGet = await fetch(`http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times/${ghostPosted.id}/ghost`);
+    const ghostBody = await ghostGet.json();
+    check('the ghost is fetched whole', ghostGet.status === 200 && ghostBody.ghost === ghostWire && ghostBody.lapMs === 31500);
+    const adaRow = ghostList.times.find((t) => t.name === 'Ada Two');
+    const noGhost = await fetch(`http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times/${adaRow.id}/ghost`);
+    check('a time posted without a ghost answers 404', noGhost.status === 404);
+    const badGhostId = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times/constructor/ghost');
+    check('a non-time ghost address is not a 500', badGhostId.status === 400 || badGhostId.status === 404);
+    const badGhost = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bo', lapMs: 31500, ghost: 'AAAA' }),
+    });
+    check('a malformed ghost is refused, not stored', badGhost.status === 400);
+    const wrongLap = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bo', lapMs: 90000, ghost: ghostWire }),
+    });
+    check('a ghost for a different lap is refused', wrongLap.status === 400);
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
     check('the page is served', html.includes('The board') && html.includes('app.js'));
     /* Relative, not root absolute. The board is served at its own root here
@@ -443,9 +552,12 @@ async function testHttp() {
     const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
       simAnchors.length === 4 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
+    /* Six: the card's Fly, the sheet's Fly and Remix, the header and
+     * footer rewrite helper, the empty-board Build link, and the chase
+     * link builder the podium and the sheet's table both go through. */
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
-      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 5);
+      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 6);
     check('nothing app.js builds opens a bare new tab or asks for noopener',
       !app.includes("'_blank'") && !app.includes("noopener'"));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
@@ -485,8 +597,26 @@ async function testHttp() {
     });
     const patchedBody = await patched.json();
     check('an agent can mark a ticket in progress', patched.status === 200 && patchedBody.status === 'in_progress');
+    const feel = await fetch('http://127.0.0.1:3199/api/bugs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'feel',
+        title: 'Flight feel: about right',
+        what: 'The quad felt about right this run. Locked in, no complaints.',
+        reporter: 'Ada Rook',
+        context: { map: 'field', tune: 'crapshack' },
+      }),
+    });
+    const feelTicket = await feel.json();
+    check('flight feel feedback lands as a ticket', feel.status === 201 && feelTicket.kind === 'feel');
+    const feelList = await fetch('http://127.0.0.1:3199/api/bugs?kind=feel').then((r) => r.json());
+    check('the feedback filter lists only feel reports',
+      feelList.bugs.length === 1 && feelList.bugs[0].id === feelTicket.id
+      && feelList.bugs.every((b) => b.kind === 'feel'));
     const inbox = await fetch('http://127.0.0.1:3199/bugs.html').then((r) => r.text());
-    check('the inbox page is served', inbox.includes('Bug tickets') && inbox.includes('bugs.js'));
+    check('the inbox page is served', inbox.includes('Bugs and feedback') && inbox.includes('bugs.js'));
+    check('the inbox can filter by kind', inbox.includes('id="kind"') && inbox.includes('Feedback, flight feel'));
     check('the inbox loads its script relatively', inbox.includes('src="bugs.js"'));
     check('the inbox has no root absolute reference', !inbox.includes('src="/') && !inbox.includes('href="/'));
     const bugsJs = await fetch('http://127.0.0.1:3199/bugs.js').then((r) => r.text());
@@ -494,7 +624,7 @@ async function testHttp() {
       !app.includes("fetch('/") && !app.includes('fetch(`/')
       && !bugsJs.includes("fetch('/") && !bugsJs.includes('fetch(`/'));
     const inboxShort = await fetch('http://127.0.0.1:3199/bugs');
-    check('/bugs serves the inbox', inboxShort.status === 200 && (await inboxShort.text()).includes('Bug tickets'));
+    check('/bugs serves the inbox', inboxShort.status === 200 && (await inboxShort.text()).includes('Bugs and feedback'));
     const proto = await fetch('http://127.0.0.1:3199/api/bugs/constructor');
     check('a non-ticket id is not a 500', proto.status === 400 || proto.status === 404);
     const stillBoard = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());

@@ -38,6 +38,30 @@ function newBugId() {
   return `bug-${randomBytes(4).toString('hex')}`;
 }
 
+/* The handle a time is addressed by over the API. Minted here, like a bug
+ * id, because the file store has no serial and the Postgres serial is a
+ * storage detail nothing outside this file should learn. */
+function newTimeId() {
+  return `tm-${randomBytes(4).toString('hex')}`;
+}
+
+/*
+ * A time row as the API shows it in a list: the ghost blob itself never
+ * travels with a track, only the fact that one exists, or a course with
+ * forty recorded laps would weigh megabytes on every open of its sheet.
+ * Rows from before ghosts have no public id; they read as unfetchable,
+ * which they are.
+ */
+function summaryTime(row) {
+  return {
+    id: row.id || null,
+    name: row.name,
+    lapMs: row.lapMs,
+    postedUtc: row.postedUtc,
+    hasGhost: Boolean(row.ghost),
+  };
+}
+
 function bugLimit(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1) {
@@ -201,7 +225,7 @@ class FileStore {
     }
     const times = [...(this.data.times[id] || [])]
       .sort(byLap);
-    return { ...summaryOf(track, times), times };
+    return { ...summaryOf(track, times), times: times.map(summaryTime) };
   }
 
   async getDocument(id) {
@@ -272,23 +296,45 @@ class FileStore {
     };
   }
 
-  async addTime({ trackId, name, lapMs }) {
-    return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs }));
+  async addTime({ trackId, name, lapMs, ghost }) {
+    return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs, ghost }));
   }
 
-  async addTimeUnlocked({ trackId, name, lapMs }) {
+  hasTimeId(id) {
+    for (const list of Object.values(this.data.times)) {
+      if (list.some((row) => row.id === id)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async addTimeUnlocked({ trackId, name, lapMs, ghost }) {
     const track = this.data.tracks[trackId];
     if (!track) {
       return { error: 'That course is not on the board.', status: 404 };
     }
-    const row = { name, lapMs, postedUtc: nowIso() };
+    let id = newTimeId();
+    while (this.hasTimeId(id)) {
+      id = newTimeId();
+    }
+    const row = { id, name, lapMs, ghost: ghost || null, postedUtc: nowIso() };
     const list = this.data.times[trackId] || [];
     list.push(row);
     this.data.times[trackId] = list;
     await this.flush();
     const ranked = [...list].sort(byLap);
     const rank = ranked.findIndex((t) => t === row) + 1;
-    return { name, lapMs, postedUtc: row.postedUtc, rank, times: ranked.length };
+    return { id, name, lapMs, postedUtc: row.postedUtc, rank, times: ranked.length };
+  }
+
+  async getGhost(trackId, timeId) {
+    const list = this.data.times[trackId] || [];
+    const row = list.find((t) => t.id === timeId);
+    if (!row) {
+      return null;
+    }
+    return { id: row.id, name: row.name, lapMs: row.lapMs, ghost: row.ghost || null };
   }
 
   async listBugs({ status, kind, limit } = {}) {
@@ -393,7 +439,9 @@ class PgStore {
       return null;
     }
     const times = await this.pool.query(
-      'SELECT name, lap_ms AS "lapMs", posted_utc AS "postedUtc" FROM times WHERE track_id = $1 ORDER BY lap_ms ASC, posted_utc ASC',
+      `SELECT public_id AS id, name, lap_ms AS "lapMs", posted_utc AS "postedUtc",
+              (ghost IS NOT NULL) AS "hasGhost"
+       FROM times WHERE track_id = $1 ORDER BY lap_ms ASC, posted_utc ASC`,
       [id],
     );
     /* `best` too. The file store's getTrack returns it through summaryOf
@@ -488,7 +536,21 @@ class PgStore {
     }
   }
 
-  async addTime({ trackId, name, lapMs }) {
+  async addTime({ trackId, name, lapMs, ghost }) {
+    /* The public id is random, so an insert can collide with an existing
+     * row's unique index. The whole transaction retries on a fresh id, the
+     * same shape as addBug's loop; six failures in a row is not luck, it is
+     * a broken random source, and deserves the throw. */
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const result = await this.addTimeOnce({ trackId, name, lapMs, ghost });
+      if (result !== null) {
+        return result;
+      }
+    }
+    throw new Error('Could not allocate a time id.');
+  }
+
+  async addTimeOnce({ trackId, name, lapMs, ghost }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -498,10 +560,10 @@ class PgStore {
         return { error: 'That course is not on the board.', status: 404 };
       }
       const inserted = await client.query(
-        `INSERT INTO times (track_id, name, lap_ms, posted_utc)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id, name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
-        [trackId, name, lapMs],
+        `INSERT INTO times (track_id, public_id, name, lap_ms, ghost, posted_utc)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING id, public_id AS "publicId", name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
+        [trackId, newTimeId(), name, lapMs, ghost || null],
       );
       /*
        * Ranked against the stored row, by its id, and entirely inside
@@ -524,6 +586,7 @@ class PgStore {
       const count = await client.query('SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1', [trackId]);
       await client.query('COMMIT');
       return {
+        id: inserted.rows[0].publicId,
         name,
         lapMs,
         postedUtc: inserted.rows[0].postedUtc,
@@ -536,10 +599,24 @@ class PgStore {
       } catch (ignored) {
         /* Connection may already be dead. */
       }
+      if (e.code === '23505') {
+        /* The random public id landed on an existing one; the caller's
+         * loop rolls a new one. */
+        return null;
+      }
       throw e;
     } finally {
       client.release();
     }
+  }
+
+  async getGhost(trackId, timeId) {
+    const found = await this.pool.query(
+      `SELECT public_id AS id, name, lap_ms AS "lapMs", ghost
+       FROM times WHERE track_id = $1 AND public_id = $2`,
+      [trackId, timeId],
+    );
+    return found.rowCount ? found.rows[0] : null;
   }
 
   async listBugs({ status, kind, limit } = {}) {

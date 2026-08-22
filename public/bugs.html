@@ -1,8 +1,9 @@
 <!doctype html>
 <!--
-  Bug tickets. Testers file these from the simulator. This page is the
-  inbox: list, read, mark in progress or fixed. Agents can use the JSON
-  API instead; this is the human view of the same store.
+  Bugs and feedback. Testers file both from the simulator: bug tickets
+  and flight feel feedback, one store, told apart by kind. This page is
+  the inbox: list, read, mark in progress or fixed. Agents can use the
+  JSON API instead; this is the human view of the same store.
 
   This file is part of WebFPVLeaderboard.
 
@@ -15,7 +16,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bug tickets, WebFPV</title>
+    <title>Bugs and feedback, WebFPV</title>
     <meta name="robots" content="noindex" />
     <!-- The board's mark. See public/index.html. -->
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
@@ -97,6 +98,11 @@
       .badge.open { color: var(--amber); border-color: var(--amber); }
       .badge.in_progress { color: var(--sakura); border-color: var(--sakura); }
       .badge.fixed { color: var(--mint); border-color: var(--mint); }
+      /* Feedback is the signal the tune work runs on, so it wears mint,
+         the colour this page paints a record in, in the badge and in the
+         list, and never disappears into the grey of the bug rows. */
+      .badge.feel { color: var(--mint); border-color: var(--mint); }
+      .ticket .meta .kind.feel { color: var(--mint); }
       .block { margin: 14px 0; }
       .block h3 {
         margin: 0 0 6px; font-size: 11px; letter-spacing: 0.14em;
@@ -118,10 +124,11 @@
     <div class="chequer"></div>
     <div class="wrap">
       <div class="kicker">WebFPV</div>
-      <h1>Bug tickets</h1>
+      <h1>Bugs and feedback</h1>
       <p class="lede">
-        Testers file these from the simulator. This page lists them so you, or an agent,
-        can read one and mark it. Same data as <code>/api/bugs</code>.
+        Testers file bug tickets and flight feel feedback from the simulator, and both
+        land here. This page lists them so you, or an agent, can read one and mark it.
+        Same data as <code>/api/bugs</code>.
         <a href="./">Back to the board</a>.
       </p>
       <div class="bar">
@@ -133,6 +140,17 @@
             <option value="wontfix">Won't fix</option>
             <option value="duplicate">Duplicate</option>
             <option value="">All</option>
+          </select>
+        </label>
+        <label>Kind
+          <select id="kind">
+            <option value="">All kinds</option>
+            <option value="feel">Feedback, flight feel</option>
+            <option value="crash">Crash or freeze</option>
+            <option value="blocking">Cannot play</option>
+            <option value="wrong">Wrong behaviour</option>
+            <option value="visual">Looks wrong</option>
+            <option value="other">Other</option>
           </select>
         </label>
         <label>Token
