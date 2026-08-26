@@ -551,10 +551,11 @@ async function testHttp() {
      */
     const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
-      simAnchors.length === 4 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
+      simAnchors.length === 7 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
     /* Six: the card's Fly, the sheet's Fly and Remix, the header and
      * footer rewrite helper, the empty-board Build link, and the chase
-     * link builder the podium and the sheet's table both go through. */
+     * link builder the podium and the sheet's table both go through.
+     * Credits uses that same rewrite helper. */
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
       && (app.match(/\.target = SIM_WINDOW/g) || []).length === 6);

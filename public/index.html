@@ -1061,7 +1061,7 @@
       .credit-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
       @media (min-width: 640px) {
         .credit-row.pair { grid-template-columns: 1fr 1fr; }
-        .credit-row.pilots { grid-template-columns: 1fr 1fr 1fr; }
+        .credit-row.pilots { grid-template-columns: 1fr 1fr; }
       }
       .credit-logo {
         display: flex;
@@ -1199,7 +1199,7 @@
         <nav class="links">
           <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
           <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
-          <a class="text" href="#credits">Credits</a>
+          <a class="text" id="mast-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
         </nav>
       </div>
     </header>
@@ -1211,7 +1211,7 @@
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
           <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
-          <a class="text" href="#credits">Credits</a>
+          <a class="text" id="spine-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
         </nav>
       </div>
     </div>
@@ -1256,7 +1256,7 @@
       <nav>
         <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
         <a href="bugs.html">Bugs and feedback</a>
-        <a href="#credits">Credits</a>
+        <a id="foot-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
       </nav>
     </footer>
 

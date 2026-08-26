@@ -261,6 +261,27 @@ function courseHref(id) {
   return `#course=${encodeURIComponent(id)}`;
 }
 
+/*
+ * The credits roll lives on the simulator at #credits. This board used to
+ * paint a second copy, and the two drifted. One page, not two.
+ *
+ * On webfpv.org the simulator is a mount on the same host, so a root-relative
+ * /sim/#credits is the address. Locally the simulator is another origin, so
+ * the config's simOrigin is the address.
+ */
+function creditsHref(config) {
+  const origin = String((config && config.simOrigin) || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  try {
+    const host = window.location.hostname;
+    if (host === 'webfpv.org' || host === 'www.webfpv.org') {
+      return `${window.location.origin}/sim/#credits`;
+    }
+  } catch (e) {
+    /* No window, as in Node. */
+  }
+  return `${origin}/#credits`;
+}
+
 /* ------------------------------------------------------------------ */
 /* State                                                               */
 /* ------------------------------------------------------------------ */
@@ -969,7 +990,10 @@ function clearHash() {
 function route() {
   const hash = location.hash;
   if (hash === '#credits') {
-    openSheet(byId('credits-sheet'));
+    /* Old bookmarks, and the three Credits links before bindLinks ran,
+     * used to open an overlay copy of the roll. Take this tab to the
+     * simulator's credits page instead. */
+    window.location.replace(creditsHref(state.config));
     return;
   }
   const found = hash.match(/^#course=(.+)$/);
@@ -1014,11 +1038,13 @@ function watchSpine() {
 function bindLinks(config) {
   const sim = `${config.simOrigin}/`;
   const builder = `${config.simOrigin}/src/trackbuilder/index.html`;
-  /* These four used to navigate this tab, which left the visitor with a
+  const credits = creditsHref(config);
+  /* These used to navigate this tab, which left the visitor with a
    * simulator where the board had been and no way back but the back
    * button. They go to the simulator's tab now, the same one Fly this
    * course uses, so the board stays open behind it and a second click
-   * does not make a second simulator. */
+   * does not make a second simulator. Credits is the same tab, on
+   * the simulator's #credits page. */
   const set = (id, href) => {
     const n = byId(id);
     if (n) {
@@ -1030,6 +1056,9 @@ function bindLinks(config) {
   set('foot-sim', sim);
   set('builder-link', builder);
   set('spine-build', builder);
+  set('mast-credits', credits);
+  set('spine-credits', credits);
+  set('foot-credits', credits);
 }
 
 function bindToolbar() {
@@ -1133,15 +1162,16 @@ async function start() {
    * stacking up another one. window.name survives navigation within this
    * origin, so the bugs page and a course hash keep the claim. */
   window.name = BOARD_WINDOW;
+  window.addEventListener('hashchange', route);
+  if (location.hash === '#credits') {
+    route();
+    return;
+  }
   watchSpine();
   watchOrbit();
   watchKeys();
   watchResize();
   bindCredits();
-  window.addEventListener('hashchange', route);
-  if (location.hash === '#credits') {
-    route();
-  }
 
   const list = byId('list');
   const notice = byId('notice');
