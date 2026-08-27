@@ -46,6 +46,11 @@ const MIME = new Map([
   ['.json', 'application/json; charset=utf-8'],
   ['.svg', 'image/svg+xml'],
   ['.png', 'image/png'],
+  /* The credits roll's pilot faces are photographs, so they are JPEG.
+     Without a row here they go out as application/octet-stream and the
+     one page that shows a person's face shows four broken images. */
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
   ['.ico', 'image/x-icon'],
 ]);
 
