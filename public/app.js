@@ -34,6 +34,7 @@
  * along with WebFPVLeaderboard. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { guessSimOrigin as guess } from './origins.js';
 import { fillCredits } from './credits.js';
 import {
   fieldSize, paintPlans, planCanvas, planLabel,
@@ -75,6 +76,16 @@ const HERE_ORIGIN = HERE.href.replace(/\/+$/, '');
 
 function here(path) {
   return new URL(path, HERE).href;
+}
+
+/* Where the simulator is when /api/config cannot say. See origins.js. */
+function guessSimOrigin() {
+  try {
+    return guess(window.location, HERE);
+  } catch (e) {
+    /* No window, as in Node. */
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -270,7 +281,7 @@ function courseHref(id) {
  * the config's simOrigin is the address.
  */
 function creditsHref(config) {
-  const origin = String((config && config.simOrigin) || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  const origin = String((config && config.simOrigin) || guessSimOrigin() || 'http://127.0.0.1:8000').replace(/\/+$/, '');
   try {
     const host = window.location.hostname;
     if (host === 'webfpv.org' || host === 'www.webfpv.org') {
@@ -287,7 +298,10 @@ function creditsHref(config) {
 /* ------------------------------------------------------------------ */
 
 const state = {
-  config: { simOrigin: 'http://127.0.0.1:8000', boardOrigin: HERE_ORIGIN },
+  /* The guess, not a loopback literal. /api/config overwrites it when it
+   * answers; when it does not, this is already right on both layouts that
+   * can be worked out from this page's address. See guessSimOrigin. */
+  config: { simOrigin: guessSimOrigin() || 'http://127.0.0.1:8000', boardOrigin: HERE_ORIGIN },
   courses: [],
   timesById: new Map(),
   query: '',
@@ -1194,12 +1208,43 @@ async function start() {
     return body;
   };
 
+  /*
+   * BIND THE LINKS BEFORE ASKING THE SERVER ANYTHING.
+   *
+   * Every cross-origin href in the HTML is a loopback address, written there
+   * so the page still works from a checkout. bindLinks used to be the only
+   * thing that replaced them and it ran inside the try below, after the
+   * config request: one failed request and a public board kept them, so
+   * Open the simulator, Build a course and Credits all pointed at a machine
+   * the visitor is not sitting at. The guess is right on both layouts that
+   * can be derived from this page's own address, so bind it now and let the
+   * served config correct it if and when it arrives.
+   */
+  bindLinks(state.config);
+
+  /*
+   * The config request is NOT fatal, and the tracks request is.
+   *
+   * They used to share one try, so a 500 on config threw the whole page away
+   * including a board full of courses that would have loaded. The only thing
+   * config carries is simOrigin, which guessSimOrigin has already answered,
+   * so losing it costs the links nothing on either derivable layout.
+   */
   try {
-    /* simOrigin from the board, because only the board knows it. boardOrigin
-     * from this page, because only this page does. See HERE_ORIGIN above. */
+    /* simOrigin from the board, because only the board knows it: it is the
+     * one case a page standing at its own address cannot work out, a board
+     * and a simulator on unrelated hosts. boardOrigin from this page,
+     * because only this page does. See HERE_ORIGIN above. */
     const served = await getJson(here('api/config'));
     state.config = { ...state.config, ...served, boardOrigin: HERE_ORIGIN };
     bindLinks(state.config);
+  } catch (e) {
+    /* Deliberately quiet. Nothing a visitor can act on, the links are
+     * already bound, and the tracks request below is about to say
+     * something far more useful if the board is genuinely down. */
+  }
+
+  try {
     const payload = await getJson(here('api/tracks'));
     state.courses = payload.tracks || [];
   } catch (e) {

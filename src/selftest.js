@@ -20,6 +20,7 @@ import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
 } from './validate.js';
 import { openStore } from './store.js';
+import { guessSimOrigin, isLoopback } from '../public/origins.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let failed = 0;
@@ -535,6 +536,19 @@ async function testHttp() {
     check('the page has no root absolute reference', !html.includes('src="/') && !html.includes('href="/'));
     check('the page does not load a webfont', !html.includes('fonts.googleapis.com'));
     const app = await fetch('http://127.0.0.1:3199/app.js').then((r) => r.text());
+    /*
+     * app.js imports origins.js. A module import that 404s takes the WHOLE
+     * page down, not just the links, so the one thing this file must prove
+     * about it is that it is actually served and is actually a module.
+     */
+    const origins = await fetch('http://127.0.0.1:3199/origins.js');
+    const originsBody = await origins.text();
+    check('origins.js is served', origins.status === 200);
+    check('origins.js is served as javascript',
+      String(origins.headers.get('content-type') || '').includes('javascript'));
+    check('app.js imports it relatively', app.includes("from './origins.js'"));
+    check('origins.js exports what app.js imports',
+      originsBody.includes('export function guessSimOrigin'));
     const cardFn = app.slice(app.indexOf('function cardFor('));
     const attach = cardFn.indexOf('card.append(body)');
     const paint = cardFn.indexOf('paintPodium(');
@@ -636,6 +650,53 @@ async function testHttp() {
   }
 }
 
+
+/*
+ * The links a visitor clicks must be right whether or not /api/config
+ * answers. bindLinks used to run only after that request came back, so one
+ * failure left every cross-origin href on the loopback address baked into
+ * the HTML. app.js itself cannot be imported here, it touches `document` at
+ * module load, which is why the resolution lives in public/origins.js.
+ */
+function testOrigins() {
+  console.log('\norigins, without asking the server');
+
+  const at = (href) => {
+    const u = new URL(href);
+    /* HERE in app.js: this page's own directory. */
+    return [u, new URL('./', href)];
+  };
+
+  check('a checkout on 127.0.0.1 finds the simulator on 8000',
+    guessSimOrigin(...at('http://127.0.0.1:3100/')) === 'http://127.0.0.1:8000');
+  check('localhost by name, same answer',
+    guessSimOrigin(...at('http://localhost:3100/')) === 'http://localhost:8000');
+  check('a course hash does not change the answer',
+    guessSimOrigin(...at('http://127.0.0.1:3100/#course=trk-1a2b3c4d')) === 'http://127.0.0.1:8000');
+
+  check('the /board mount finds its sibling /sim',
+    guessSimOrigin(...at('https://webfpv.org/board/')) === 'https://webfpv.org/sim');
+  check('the bug page under the mount answers the same',
+    guessSimOrigin(...at('https://webfpv.org/board/bugs')) === 'https://webfpv.org/sim');
+
+  /*
+   * The one case that cannot be derived, and must NOT be guessed: a board
+   * on its own host. Returning a loopback address here is the defect this
+   * whole file exists to close, so null is the right answer and app.js
+   * leaves those links alone until /api/config says otherwise.
+   */
+  check('a board on its own host declines to guess',
+    guessSimOrigin(...at('https://webfpvsimulator-leaderboard.onrender.com/')) === null);
+  check('a public host at the root declines to guess',
+    guessSimOrigin(...at('https://webfpv.org/')) === null);
+
+  check('a missing location is not a crash', guessSimOrigin(null, null) === null);
+  check('loopback set covers the hosts a checkout uses',
+    isLoopback('127.0.0.1') && isLoopback('localhost') && isLoopback('::1')
+      && !isLoopback('webfpv.org'));
+}
+
+testOrigins();
 await testValidate();
 await testStore();
 await testHttp();
