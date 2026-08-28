@@ -33,13 +33,13 @@ export const TRACK_ID_RE = /^trk-[0-9a-f]{8}$/;
 export const TIME_ID_RE = /^tm-[0-9a-f]{8}$/;
 /*
  * 560_000, up from 420_000, and the number is derived rather than picked.
- * A course carries up to five sponsors' logos now instead of one, sharing a
+ * A track carries up to five sponsors' logos now instead of one, sharing a
  * 384 kB budget (BRANDING_MAX_CHARS in the simulator's
  * src/trackbuilder/model.js). The old cap was one 256 kB logo plus about
- * 158 kB of headroom for the course itself; this is the new branding budget
+ * 158 kB of headroom for the track itself; this is the new branding budget
  * plus the same headroom, so exactly as much room is left for gates as
  * before. See also the publish body limit in server.js, which has to be
- * above this or a course that fits is refused before it is read.
+ * above this or a track that fits is refused before it is read.
  */
 const MAX_DOCUMENT_CHARS = 560_000;
 const MAX_LAP_MS = 3_600_000;
@@ -151,10 +151,10 @@ export function inspectGhost(raw, lapMs) {
 
 const LOGO_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 
-/* The three caps on a course's branding, all of them the simulator's, from
+/* The three caps on a track's branding, all of them the simulator's, from
  * LOGO_MAX_CHARS, LOGO_SLOTS and BRANDING_MAX_CHARS in its
  * src/trackbuilder/model.js. They live there because that is where an author
- * actually hits them; these copies exist so the board never holds a course
+ * actually hits them; these copies exist so the board never holds a track
  * the tool that made it would not save. An earlier copy of the first one was
  * 280_000 rather than 256 KiB, and a logo between the two sizes was refused
  * by the builder and accepted here. Change all three together. */
@@ -167,14 +167,14 @@ function usableLogo(value) {
 }
 
 /*
- * The sponsor logos a course carries, whichever way its document spells
- * them. Not to be confused with the plan's `marks`, which are the course's
+ * The sponsor logos a track carries, whichever way its document spells
+ * them. Not to be confused with the plan's `marks`, which are the track's
  * own geometry: the builder calls the pictures sponsor logos and so does
  * every sentence the board shows an author.
  *
  * A schemaVersion 1 document has one `branding.logo`; a version 2 one has
  * `branding.logos`, a list of up to five { id, image, name }. Both are read,
- * because the board holds courses published under the old spelling and they
+ * because the board holds tracks published under the old spelling and they
  * have to keep working when their author republishes an unchanged copy.
  *
  * Returns { images } or { error }. The board does not repair a document: it
@@ -188,33 +188,33 @@ function inspectBranding(document) {
     return { images: [] };
   }
   if (!isObject(branding)) {
-    return { error: 'That course\u2019s branding is not readable.' };
+    return { error: 'That track\u2019s branding is not readable.' };
   }
   const raw = Array.isArray(branding.logos)
     ? branding.logos
     : (branding.logo != null && branding.logo !== '' ? [{ image: branding.logo }] : []);
   if (raw.length > LOGO_SLOTS) {
-    return { error: `A course carries at most ${LOGO_SLOTS} sponsor logos.` };
+    return { error: `A track carries at most ${LOGO_SLOTS} sponsor logos.` };
   }
   const images = [];
   let spent = 0;
   for (const entry of raw) {
     const image = typeof entry === 'string' ? entry : (isObject(entry) ? entry.image : null);
     if (!usableLogo(image)) {
-      return { error: 'A sponsor logo has to travel inside the course as an embedded image.' };
+      return { error: 'A sponsor logo has to travel inside the track as an embedded image.' };
     }
     spent += image.length;
     images.push(image);
   }
   if (spent > BRANDING_MAX_CHARS) {
-    return { error: `A course\u2019s sponsor logos share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
+    return { error: `A track\u2019s sponsor logos share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
   }
   return { images };
 }
 
 /*
  * MIRRORS layoutFingerprint in WebFPVSimulator/src/share/listing.js. This is
- * the copy that decides whether a republished course keeps its times. The
+ * the copy that decides whether a republished track keeps its times. The
  * hashes differ, the KEY LIST must not: field, elements, sequence.
  */
 /*
@@ -222,7 +222,7 @@ function inspectBranding(document) {
  * them cannot change a lap.
  *
  * THIS IS WHY A SPONSOR DOES NOT WIPE A LEADERBOARD. Selling a place on an
- * existing course means adding a logo to a track people have already flown,
+ * existing track means adding a logo to a track people have already flown,
  * and if that counted as a layout change every time on this board would be
  * cleared the moment the deal was signed. Paint has no collider and is not
  * in the flying order, so a lap flown before it was painted is the same lap.
@@ -230,9 +230,9 @@ function inspectBranding(document) {
  * MIRRORS LAYOUT_SKIP in WebFPVSimulator/src/share/listing.js. Written out
  * as a literal in both, rather than derived from the simulator's element
  * library, because this repository has no element library and the two lists
- * have to be edited together on purpose. A course with no painted logos
+ * have to be edited together on purpose. A track with no painted logos
  * hashes to exactly what it hashed to before this filter existed, which is
- * what keeps every already published course's times.
+ * what keeps every already published track's times.
  */
 const LAYOUT_SKIP = new Set(['groundLogo']);
 
@@ -252,7 +252,7 @@ export function hashEditKey(key) {
 /* Drawn as nothing on a plan card. A waypoint pins the flying order with
  * nothing standing on the field, a label is an authoring note, and a ground
  * logo is paint: all three drew as gates once, which is how a championship
- * plan turned into a scatter of bars that are not on the course. */
+ * plan turned into a scatter of bars that are not on the track. */
 const PLAN_SKIP = new Set(['label', 'waypoint', 'groundLogo']);
 const PLAN_APERTURE = new Set([
   'gate', 'flaggedGate', 'doubleStack', 'flaggedDoubleStack', 'ladder', 'tower', 'diveGate',
@@ -278,7 +278,7 @@ export function planFromDocument(document) {
     const type = String(el.type || 'gate');
     /* A waypoint is a flying-order pin with nothing standing on the
      * field. Drawing it as a gate was how championship plans turned into
-     * a scatter of bars that are not on the course. Labels are notes. */
+     * a scatter of bars that are not on the track. Labels are notes. */
     if (PLAN_SKIP.has(type)) {
       continue;
     }
@@ -350,7 +350,7 @@ export function planFromDocument(document) {
 }
 
 /*
- * How many GATES a course has, which is not how long its flying order is.
+ * How many GATES a track has, which is not how long its flying order is.
  * A waypoint is an order pin with nothing standing on the field, and a
  * marker only scores when it carries clearance, so counting steps put a
  * number on the card that neither the plan's badges nor the simulator's own
@@ -385,48 +385,48 @@ function gateCount(document) {
 
 export function inspectDocument(raw) {
   if (typeof raw === 'string' && raw.length > MAX_DOCUMENT_CHARS) {
-    return { error: 'That course is too large to publish.' };
+    return { error: 'That track is too large to publish.' };
   }
   const packed = typeof raw === 'string' ? raw : JSON.stringify(raw);
   if (packed.length > MAX_DOCUMENT_CHARS) {
-    return { error: 'That course is too large to publish.' };
+    return { error: 'That track is too large to publish.' };
   }
   let document = raw;
   if (typeof raw === 'string') {
     try {
       document = JSON.parse(raw);
     } catch (e) {
-      return { error: 'That course is not valid JSON.' };
+      return { error: 'That track is not valid JSON.' };
     }
   }
   if (!isObject(document)) {
-    return { error: 'That course is not a track document.' };
+    return { error: 'That file is not a track document.' };
   }
   /*
-   * 1 and 2. Version 2 is where a course grew from one logo to five, which
+   * 1 and 2. Version 2 is where a track grew from one logo to five, which
    * is a branding change and nothing else: field, elements and sequence read
-   * identically, so a version 1 course already on this board keeps its times
+   * identically, so a version 1 track already on this board keeps its times
    * when its author republishes it from a newer builder.
    */
   if (document.schemaVersion !== 1 && document.schemaVersion !== 2) {
-    return { error: 'This board accepts schemaVersion 1 and 2 courses.' };
+    return { error: 'This board accepts schemaVersion 1 and 2 tracks.' };
   }
   const id = String(document.id || '');
   if (!TRACK_ID_RE.test(id)) {
-    return { error: 'That course has no usable id.' };
+    return { error: 'That track has no usable id.' };
   }
   const name = String(document.name || '').trim() || 'Untitled track';
-  /* The message named the field and then never looked at it, so a course
+  /* The message named the field and then never looked at it, so a track
    * with no field at all passed here and the board drew it on the 60 by 40
    * default while the simulator flew it on whatever the document said. */
   if (!isObject(document.field)) {
-    return { error: 'That course is missing its field.' };
+    return { error: 'That track is missing its field.' };
   }
   if (!Array.isArray(document.elements) || !Array.isArray(document.sequence)) {
-    return { error: 'That course is missing its elements or its flying order.' };
+    return { error: 'That track is missing its elements or its flying order.' };
   }
   if (document.sequence.length < 1) {
-    return { error: 'A published course needs at least one gate in the flying order.' };
+    return { error: 'A published track needs at least one gate in the flying order.' };
   }
   const elementIds = new Set();
   for (const el of document.elements) {
@@ -436,7 +436,7 @@ export function inspectDocument(raw) {
   }
   for (const step of document.sequence) {
     if (!isObject(step) || !elementIds.has(step.elementId)) {
-      return { error: 'That flying order names a gate that is not in the course.' };
+      return { error: 'That flying order names a gate that is not in the track.' };
     }
   }
   const branding = inspectBranding(document);
@@ -447,7 +447,7 @@ export function inspectDocument(raw) {
     document,
     id,
     name: name.slice(0, 80),
-    /* Whether the board's listing shows this course as branded. One logo or
+    /* Whether the board's listing shows this track as branded. One logo or
      * five, the card says the same thing, so the flag stays a boolean. */
     hasLogo: branding.images.length > 0,
     logoCount: branding.images.length,

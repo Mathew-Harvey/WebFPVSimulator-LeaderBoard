@@ -1,17 +1,17 @@
 <!doctype html>
 <!--
-  The public board. Every published course, and the times flown on it.
+  The public board. Every published track, and the times flown on it.
 
   Same chrome as the simulator: system fonts, cream for lit type, sakura
   for chrome, mint for a record, amber for instruments, cool mist for
   recessed type. A forest page, not a second landscape. The chequer stays
   as a racing border.
 
-  Card art is the course plan: the flown line and the things that stand on
+  Card art is the track plan: the flown line and the things that stand on
   the field, drawn from the list payload, in the track builder's blueprint
   palette. Waypoints pin the line and are not drawn. The simulator's own
   orbit camera is the expensive and beautiful thing, so it plays once,
-  large, in the course sheet, rather than twelve times at once in the grid.
+  large, in the track sheet, rather than twelve times at once in the grid.
 
   This file is part of WebFPVLeaderboard.
 
@@ -25,7 +25,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>The Board, WebFPV</title>
-    <meta name="description" content="Every published WebFPV course, and the lap times flown on it." />
+    <meta name="description" content="Every published WebFPV track, and the lap times flown on it." />
     <!--
       A link to this page posted anywhere renders a 1200 by 630 card, and
       og.png is a frame of the real shell rather than a drawing of one, so it
@@ -42,17 +42,17 @@
     <meta property="og:site_name" content="WebFPV" />
     <meta property="og:url" content="https://webfpv.org/board/" />
     <meta property="og:title" content="The Board, WebFPV" />
-    <meta property="og:description" content="Every published WebFPV course, and the lap times flown on it. Pick one, fly it, and see where you land." />
+    <meta property="og:description" content="Every published WebFPV track, and the lap times flown on it. Pick one, fly it, and see where you land." />
     <meta property="og:image" content="https://webfpv.org/board/og.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and course markers running away under a low sun." />
+    <meta property="og:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and track markers running away under a low sun." />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="The Board, WebFPV" />
-    <meta name="twitter:description" content="Every published WebFPV course, and the lap times flown on it. Pick one, fly it, and see where you land." />
+    <meta name="twitter:description" content="Every published WebFPV track, and the lap times flown on it. Pick one, fly it, and see where you land." />
     <meta name="twitter:image" content="https://webfpv.org/board/og.png" />
-    <meta name="twitter:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and course markers running away under a low sun." />
+    <meta name="twitter:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and track markers running away under a low sun." />
 
     <!--
       Mint, which is what this page paints a record in, and the one accent of
@@ -67,7 +67,7 @@
     <style>
       /* ---------------------------------------------------------------
          Tokens. The simulator's palette, unchanged, plus one cool plate
-         for the plan drawings so a course plan reads as a drawing and
+         for the plan drawings so a track plan reads as a drawing and
          not as a second landscape.
          --------------------------------------------------------------- */
       :root {
@@ -315,7 +315,7 @@
 
       /* ---------------------------------------------------------------
          Sticky spine. Takes over from the masthead on scroll and carries
-         the search field with it, because finding a course is the thing
+         the search field with it, because finding a track is the thing
          you want halfway down a long board.
          --------------------------------------------------------------- */
       .spine {
@@ -361,7 +361,7 @@
       }
 
       /* ---------------------------------------------------------------
-         Layout. Courses on the left, standings on the right once there
+         Layout. Tracks on the left, standings on the right once there
          is a screen wide enough and a time worth ranking.
          --------------------------------------------------------------- */
       main {
@@ -469,7 +469,7 @@
       }
 
       /* ---------------------------------------------------------------
-         The grid of courses.
+         The grid of tracks.
          --------------------------------------------------------------- */
       .grid {
         display: grid;
@@ -597,7 +597,7 @@
       }
       .record-holder:empty { display: none; }
 
-      /* Top three, once a course has been flown. */
+      /* Top three, once a track has been flown. */
       .podium {
         margin: 0;
         padding: 4px 10px;
@@ -795,7 +795,7 @@
       .skeleton .bone.thin { width: 40%; }
 
       /* ---------------------------------------------------------------
-         The course sheet. One course, full width: the simulator's own
+         The track sheet. One track, full width: the simulator's own
          orbit camera, the plan, the facts, and every time posted.
          --------------------------------------------------------------- */
       .sheet {
@@ -1006,7 +1006,7 @@
       tr.r1 .gap-bar span { background: var(--mint); }
 
       /* ---------------------------------------------------------------
-         Credits sheet. Same shell as the course sheet, and the same roll
+         Credits sheet. Same shell as the track sheet, and the same roll
          the simulator serves at #credits: sections ruled like a printed
          page, the beta roll a start list with a slot number under each
          face, and every card that names a person opening that person's
@@ -1406,7 +1406,7 @@
     </style>
   </head>
   <body>
-    <a class="skip" href="#courses">Skip to the courses</a>
+    <a class="skip" href="#tracks">Skip to the tracks</a>
     <div class="chequer" aria-hidden="true"></div>
 
     <header class="mast">
@@ -1414,13 +1414,13 @@
         <h1>WEB<span class="fpv">FPV</span></h1>
         <div class="eyebrow">The board</div>
         <p class="invite">
-          Every published course, and the times flown on it. Open one, fly it in
+          Every published track, and the times flown on it. Open one, fly it in
           the browser, and post a lap under your name.
         </p>
       </div>
       <div class="mast-side">
         <dl class="stats" id="mast-stats" hidden>
-          <div><dt>Courses</dt><dd id="stat-courses">0</dd></div>
+          <div><dt>Tracks</dt><dd id="stat-courses">0</dd></div>
           <div><dt>Times</dt><dd id="stat-times">0</dd></div>
           <div><dt>Pilots</dt><dd id="stat-pilots">0</dd></div>
         </dl>
@@ -1433,7 +1433,7 @@
              each click to a fresh tab. See src/share/windows.js in the
              simulator. -->
         <nav class="links">
-          <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
           <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
           <a class="text" id="mast-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
         </nav>
@@ -1446,13 +1446,13 @@
         <span class="spine-mark">WEB<span class="fpv">FPV</span></span>
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
-          <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a course</a>
+          <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
           <a class="text" id="spine-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
         </nav>
       </div>
     </div>
 
-    <main id="courses">
+    <main id="tracks">
       <div class="deck" id="deck">
         <div class="deck-main">
           <div class="toolbar" id="toolbar" hidden>
@@ -1461,7 +1461,7 @@
                 <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.5" />
                 <path d="M10.6 10.6 L14.5 14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
               </svg>
-              <input id="find" type="search" placeholder="Find a course or a pilot" aria-label="Find a course or a pilot" autocomplete="off" />
+              <input id="find" type="search" placeholder="Find a track or a pilot" aria-label="Find a track or a pilot" autocomplete="off" />
               <kbd>/</kbd>
             </div>
             <div class="sort">
@@ -1485,7 +1485,7 @@
 
     <footer>
       <p>
-        The WebFPV public board. Courses and named times live here. The simulator
+        The WebFPV public board. Tracks and named times live here. The simulator
         itself keeps nothing: a track you build stays in your browser until you
         publish it. Free software under GPLv3.
       </p>
@@ -1501,7 +1501,7 @@
       <div class="sheet-inner">
         <div class="sheet-top">
           <div>
-            <div class="kicker" id="sheet-kicker">Course</div>
+            <div class="kicker" id="sheet-kicker">Track</div>
             <h2 id="sheet-title"></h2>
             <p class="sheet-by" id="sheet-by"></p>
           </div>

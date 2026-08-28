@@ -1,21 +1,21 @@
 /*
  * app.js: the public board page.
  *
- * One tile per published course, ordered by a control the reader can see
- * and change. The tile art is the course plan, drawn from the list payload
+ * One tile per published track, ordered by a control the reader can see
+ * and change. The tile art is the track plan, drawn from the list payload
  * by plan.js: the flown line and the things that stand on the field, so a
  * waypoint that pins the line does not stand in as a gate. The index costs
  * two requests and no WebGL. Opening a
- * course is a real link, #course=trk-1a2b3c4d, and the sheet behind it is
+ * track is a real link, #track=trk-1a2b3c4d, and the sheet behind it is
  * where the expensive and beautiful thing lives: the simulator's own title
  * camera, playing once rather than twelve times at once.
  *
- * Times are fetched only for courses that have any, which on a young board
- * is one request instead of one per course. Those times then feed three
+ * Times are fetched only for tracks that have any, which on a young board
+ * is one request instead of one per track. Those times then feed three
  * things at no extra cost: the top three on a tile, the standings rail,
  * and the count of pilots in the masthead.
  *
- * Fly this course opens the simulator with ?share=id, which is the whole
+ * Fly this track opens the simulator with ?share=id, which is the whole
  * of the link between the two sites.
  *
  * This file is part of WebFPVLeaderboard.
@@ -50,7 +50,7 @@ import {
  * request reaches this service. The server therefore sees the same paths
  * either way and needs no telling. The PAGE does: a fetch of '/api/tracks'
  * from https://webfpv.org/board/ leaves the board's namespace entirely and
- * asks the landing page for the courses.
+ * asks the landing page for the tracks.
  *
  * So every url this page builds for itself is resolved against the directory
  * it was served from. `document.baseURI` is the document's own address, and
@@ -202,9 +202,9 @@ function reduceMotion() {
  * One board tab, one simulator tab.
  *
  * Every link that crossed to the simulator carried target="_blank", so a
- * visitor who flew three courses off this board finished with three
+ * visitor who flew three tracks off this board finished with three
  * simulators open, each of them running a physics loop and holding a WebGL
- * context. Naming the tab instead means the second course lands in the tab
+ * context. Naming the tab instead means the second track lands in the tab
  * the first one is already using, and the browser focuses it.
  *
  * Two things this depends on, both easy to undo by accident:
@@ -269,7 +269,7 @@ function orbitHref(config, id) {
 }
 
 function courseHref(id) {
-  return `#course=${encodeURIComponent(id)}`;
+  return `#track=${encodeURIComponent(id)}`;
 }
 
 /*
@@ -331,7 +331,7 @@ function bestMsOf(track) {
 /* ------------------------------------------------------------------ */
 
 /*
- * Most flown is the default because a course with times on it is a course
+ * Most flown is the default because a track with times on it is a track
  * with something to beat. The tie break is gate count rather than the
  * clock, so on a young board where almost nothing has been flown the
  * championship layouts lead and a three gate drill does not.
@@ -380,7 +380,7 @@ function visibleCourses() {
 }
 
 /* ------------------------------------------------------------------ */
-/* A course tile                                                       */
+/* A track tile                                                       */
 /* ------------------------------------------------------------------ */
 
 function cardFor(track, config) {
@@ -410,7 +410,7 @@ function cardFor(track, config) {
   by.append(` \u00b7 ${plural(track.gates, 'gate', 'gates')}`);
   head.append(by);
 
-  /* No record block on a course nobody has flown. Ten cards each carrying
+  /* No record block on a track nobody has flown. Ten cards each carrying
    * a label and a row of dashes is the difference between a board and a
    * form. The single quiet line below says the same thing once. */
   const record = el('div', 'record');
@@ -430,13 +430,13 @@ function cardFor(track, config) {
   body.append(none);
 
   const actions = el('div', 'actions');
-  const fly = el('a', 'btn primary small', 'Fly this course');
+  const fly = el('a', 'btn primary small', 'Fly this track');
   fly.href = flyHref(config, track.id);
   fly.target = SIM_WINDOW;
   fly.setAttribute('aria-label', `Fly ${track.name}, opens it in the simulator tab`);
   const more = el('a', 'text more');
   more.href = courseHref(track.id);
-  more.textContent = track.times > 3 ? `All ${plural(track.times, 'time', 'times')}` : 'Course detail';
+  more.textContent = track.times > 3 ? `All ${plural(track.times, 'time', 'times')}` : 'Track detail';
   actions.append(fly, more);
   body.append(actions);
 
@@ -445,7 +445,7 @@ function cardFor(track, config) {
 }
 
 /*
- * The top three, once a course's times have arrived. Called after the
+ * The top three, once a track's times have arrived. Called after the
  * card is in the document, never while it is still a loose node: a card
  * has to exist before anything paints into it.
  */
@@ -502,7 +502,7 @@ function paintPodium(card, times) {
   if (more) {
     more.textContent = times.length > 3
       ? `All ${plural(times.length, 'time', 'times')}`
-      : 'Course detail';
+      : 'Track detail';
   }
 }
 
@@ -540,13 +540,13 @@ function paintGrid() {
   paintPlans(list);
   if (count) {
     count.textContent = shown.length === state.courses.length
-      ? plural(state.courses.length, 'course', 'courses')
-      : `${shown.length} of ${plural(state.courses.length, 'course', 'courses')}`;
+      ? plural(state.courses.length, 'track', 'tracks')
+      : `${shown.length} of ${plural(state.courses.length, 'track', 'tracks')}`;
   }
   if (!shown.length && state.courses.length) {
     const box = el('div', 'empty panel');
     box.append(el('h2', null, 'Nothing matches that'));
-    box.append(el('p', null, `No course or pilot on the board answers to "${state.query.trim()}".`));
+    box.append(el('p', null, `No track or pilot on the board answers to "${state.query.trim()}".`));
     const clear = el('button', 'btn small', 'Clear the search');
     clear.type = 'button';
     clear.addEventListener('click', () => {
@@ -568,7 +568,7 @@ function paintGrid() {
 /* ------------------------------------------------------------------ */
 
 /*
- * A pilot's standing is how many courses they hold, not how many laps
+ * A pilot's standing is how many tracks they hold, not how many laps
  * they have posted, because posting more laps is not the same as being
  * quicker than anybody.
  */
@@ -650,7 +650,7 @@ function paintRail() {
     ])));
     table.append(row);
   });
-  table.append(el('p', 'rail-note', 'Ranked by course records held, then podiums, then laps posted.'));
+  table.append(el('p', 'rail-note', 'Ranked by track records held, then podiums, then laps posted.'));
   rail.append(table);
 
   if (feed.length) {
@@ -700,7 +700,7 @@ function paintStats() {
   if (spine) {
     spine.textContent = n
       ? joined([
-        plural(n, 'course', 'courses'),
+        plural(n, 'track', 'tracks'),
         plural(times, 'time', 'times'),
         pilots ? plural(pilots, 'pilot', 'pilots') : '',
       ])
@@ -719,7 +719,7 @@ async function loadTimes(id) {
   if (held) {
     return held;
   }
-  /* The sheet and the background fill can both want the same course, and
+  /* The sheet and the background fill can both want the same track, and
    * a shared promise is cheaper than a second request. */
   if (inflight.has(id)) {
     return inflight.get(id);
@@ -760,7 +760,7 @@ async function hydrate() {
 }
 
 /* ------------------------------------------------------------------ */
-/* The course sheet                                                    */
+/* The track sheet                                                    */
 /* ------------------------------------------------------------------ */
 
 /* Each pair goes in its own box, because a bare dt and dd in a grid flow
@@ -782,12 +782,12 @@ function paintShot(host, track) {
   }
   const frame = document.createElement('iframe');
   frame.className = 'orbit';
-  frame.title = `${track.name}, a flight through the course`;
+  frame.title = `${track.name}, a flight through the track`;
   frame.tabIndex = -1;
   frame.setAttribute('aria-hidden', 'true');
   frame.src = orbitHref(state.config, track.id);
   const wait = el('div', 'shot-wait');
-  wait.append(el('span', 'shot-dot'), el('span', null, 'Flying the course'));
+  wait.append(el('span', 'shot-dot'), el('span', null, 'Flying the track'));
   host.append(wait, frame);
 }
 
@@ -860,13 +860,13 @@ function paintBoard(host, track, times) {
 function paintHero(host, track, times) {
   host.textContent = '';
   const best = times.length ? times[0] : track.best;
-  /* An empty hero is a row of dashes the size of a headline, so a course
+  /* An empty hero is a row of dashes the size of a headline, so a track
    * with no record does not get one. The board below says it in words. */
   host.hidden = !best;
   if (!best) {
     return;
   }
-  host.append(el('span', 'record-label', 'Course record'));
+  host.append(el('span', 'record-label', 'Track record'));
   host.append(timeNode(best.lapMs, 'record-time'));
   host.append(el('div', 'record-holder', best.name));
 }
@@ -891,7 +891,7 @@ function copyButton(url) {
 async function paintSheet(track) {
   byId('sheet-kicker').textContent = track.times > 0
     ? `${plural(track.times, 'time', 'times')} posted`
-    : 'Open course';
+    : 'Open track';
   byId('sheet-title').textContent = track.name;
   const by = byId('sheet-by');
   by.textContent = '';
@@ -914,7 +914,7 @@ async function paintSheet(track) {
 
   const actions = byId('sheet-actions');
   actions.textContent = '';
-  const fly = el('a', 'btn primary', 'Fly this course');
+  const fly = el('a', 'btn primary', 'Fly this track');
   fly.href = flyHref(state.config, track.id);
   fly.target = SIM_WINDOW;
   const remix = el('a', 'text', 'Remix in the builder');
@@ -945,7 +945,7 @@ async function paintSheet(track) {
 /* The page behind an open sheet is inert, so tabbing cannot walk out of
  * the dialog into a grid nobody can see. */
 function setPageInert(on) {
-  for (const node of [document.querySelector('.mast'), document.querySelector('.spine'), byId('courses'), document.querySelector('footer')]) {
+  for (const node of [document.querySelector('.mast'), document.querySelector('.spine'), byId('tracks'), document.querySelector('footer')]) {
     if (node) {
       node.inert = on;
     }
@@ -998,7 +998,7 @@ function clearHash() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Routing. A course is an address, so it can be linked and shared.    */
+/* Routing. A track is an address, so it can be linked and shared.    */
 /* ------------------------------------------------------------------ */
 
 function route() {
@@ -1010,7 +1010,18 @@ function route() {
     window.location.replace(creditsHref(state.config));
     return;
   }
-  const found = hash.match(/^#course=(.+)$/);
+  /*
+   * #track= is what the address bar shows now, and #course= is what every
+   * link shared before this change says. Both are read, one is written.
+   *
+   * The board's whole point is that a track is a URL somebody can send to
+   * somebody else, so a rename that quietly broke the ones already sent
+   * would be the worst possible way to fix a noun. The old spelling is
+   * accepted for reading and then REWRITTEN in place, so a visitor arriving
+   * on an old link lands on the right track and leaves with a link that
+   * says track.
+   */
+  const found = hash.match(/^#(?:track|course)=(.+)$/);
   if (found) {
     let id = '';
     try {
@@ -1022,6 +1033,11 @@ function route() {
     if (!track) {
       closeSheets();
       return;
+    }
+    /* Arrived on the old spelling: put the canonical one in the address bar
+     * without adding a history entry, so Back still goes where it went. */
+    if (hash.startsWith('#course=')) {
+      history.replaceState(null, '', courseHref(track.id));
     }
     openSheet(byId('sheet'));
     state.openId = id;
@@ -1056,7 +1072,7 @@ function bindLinks(config) {
   /* These used to navigate this tab, which left the visitor with a
    * simulator where the board had been and no way back but the back
    * button. They go to the simulator's tab now, the same one Fly this
-   * course uses, so the board stays open behind it and a second click
+   * track uses, so the board stays open behind it and a second click
    * does not make a second simulator. Credits is the same tab, on
    * the simulator's #credits page. */
   const set = (id, href) => {
@@ -1174,7 +1190,7 @@ async function start() {
    * simulator's Leaderboard opens the board under this name, so a pilot
    * who checks the times between runs comes back to this tab instead of
    * stacking up another one. window.name survives navigation within this
-   * origin, so the bugs page and a course hash keep the claim. */
+   * origin, so the bugs page and a track hash keep the claim. */
   window.name = BOARD_WINDOW;
   window.addEventListener('hashchange', route);
   if (location.hash === '#credits') {
@@ -1195,8 +1211,8 @@ async function start() {
    * The status matters. Reading the body and ignoring `r.ok` meant a 500
    * from the database, or a 502 from in front of it, parsed to an object
    * with no `tracks` in it and painted "The board is empty": the one screen
-   * that tells a visitor to go and build the first course, shown while
-   * every course on the board was sitting there unreachable. An error
+   * that tells a visitor to go and build the first track, shown while
+   * every track on the board was sitting there unreachable. An error
    * belongs in the catch below, which already has a panel for it.
    */
   const getJson = async (url) => {
@@ -1215,7 +1231,7 @@ async function start() {
    * so the page still works from a checkout. bindLinks used to be the only
    * thing that replaced them and it ran inside the try below, after the
    * config request: one failed request and a public board kept them, so
-   * Open the simulator, Build a course and Credits all pointed at a machine
+   * Open the simulator, Build a track and Credits all pointed at a machine
    * the visitor is not sitting at. The guess is right on both layouts that
    * can be derived from this page's own address, so bind it now and let the
    * served config correct it if and when it arrives.
@@ -1226,7 +1242,7 @@ async function start() {
    * The config request is NOT fatal, and the tracks request is.
    *
    * They used to share one try, so a 500 on config threw the whole page away
-   * including a board full of courses that would have loaded. The only thing
+   * including a board full of tracks that would have loaded. The only thing
    * config carries is simOrigin, which guessSimOrigin has already answered,
    * so losing it costs the links nothing on either derivable layout.
    */
@@ -1258,8 +1274,8 @@ async function start() {
     list.textContent = '';
     const box = el('div', 'empty panel');
     box.append(el('h2', null, 'The board is empty'));
-    box.append(el('p', null, 'Build a course in the track builder, set a flying order, and publish it. The board starts when the first course lands.'));
-    const build = el('a', 'btn primary', 'Build a course');
+    box.append(el('p', null, 'Build a track in the track builder, set a flying order, and publish it. The board starts when the first track lands.'));
+    const build = el('a', 'btn primary', 'Build a track');
     build.href = `${state.config.simOrigin}/src/trackbuilder/index.html`;
     build.target = SIM_WINDOW;
     box.append(build);

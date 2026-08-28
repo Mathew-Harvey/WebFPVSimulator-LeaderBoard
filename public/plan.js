@@ -1,14 +1,14 @@
 /*
- * plan.js: a published course, drawn as a plan.
+ * plan.js: a published track, drawn as a plan.
  *
- * Every course on the board already ships a plan in the list payload: the
+ * Every track on the board already ships a plan in the list payload: the
  * field size, the things that stand on it, and the flown line in flying
  * order. That is enough to draw the thing, and drawing it is free. The
  * alternative, which is what this page used to do, was to iframe the
  * simulator once per card and have it build an entire world to record a
- * thumbnail. Twelve courses meant twelve worlds.
+ * thumbnail. Twelve tracks meant twelve worlds.
  *
- * The drawing speaks the track builder's own language, so a course looks
+ * The drawing speaks the track builder's own language, so a track looks
  * the same on the board as it does in the editor that made it: a cool
  * blueprint plate, a slate grid, the flown line, pale apertures across
  * the direction of travel, cream turn markers, a mint start. Waypoints
@@ -35,7 +35,7 @@
  * along with WebFPVLeaderboard. If not, see <https://www.gnu.org/licenses/>.
  */
 
-/* The mount is darker than the plate on purpose. A course is drawn to its
+/* The mount is darker than the plate on purpose. A track is drawn to its
  * own proportions, so a deep narrow field leaves margins, and those
  * margins have to read as the edge of a drawing rather than as an empty
  * part of the field. */
@@ -63,7 +63,7 @@ const C = {
 
 /* Metres. A thumbnail fattens a 5 ft opening so it still reads on a
  * hundred metre field. Types the drawer does not know stay off the
- * plate; the flown line is what makes two courses look different. */
+ * plate; the flown line is what makes two tracks look different. */
 const GATE_W = 1.524;      /* 5 ft clear opening, the chapter standard */
 const GATE_D = 0.36;       /* frame depth, enough to read as a solid */
 const DIVE_W = 2.13;       /* 7 ft, flown through from above */
@@ -92,7 +92,7 @@ function pick(steps, minPx, perMetre) {
   return steps[steps.length - 1];
 }
 
-/* A course reads as a shape long before anyone counts its gates, so the
+/* A track reads as a shape long before anyone counts its gates, so the
  * fit keeps the field's own proportions and centres it in whatever box
  * the card gives it. */
 function fit(plan, w, h, pad) {
@@ -428,7 +428,7 @@ export function drawPlan(canvas, plan, options = {}) {
 /*
  * Draw every plan canvas under `root` that is on screen and sized. A
  * canvas is measured, not assumed, so the same code serves a card tile
- * and the full width drawing in the course sheet. Canvases that are still
+ * and the full width drawing in the track sheet. Canvases that are still
  * hidden report no size and are left for the next pass.
  */
 export function paintPlans(root = document) {
@@ -446,7 +446,7 @@ export function planCanvas(plan, label, options) {
   canvas.planData = plan || null;
   canvas.planOptions = options || {};
   canvas.setAttribute('role', 'img');
-  canvas.setAttribute('aria-label', label || 'Course plan');
+  canvas.setAttribute('aria-label', label || 'Track plan');
   return canvas;
 }
 

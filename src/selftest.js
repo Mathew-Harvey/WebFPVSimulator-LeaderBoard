@@ -111,12 +111,12 @@ async function testValidate() {
   check('rejects a boolean lap', normaliseLapMs(true) == null);
   check('rejects an array lap', normaliseLapMs([1234]) == null);
   const ok = inspectDocument(sampleDoc());
-  check('accepts a schema 1 course', !ok.error && ok.id === 'trk-1a2b3c4d' && ok.gates === 1);
+  check('accepts a schema 1 track', !ok.error && ok.id === 'trk-1a2b3c4d' && ok.gates === 1);
   /* The field is what the plan is drawn on. The old message named it and
    * then never checked it. */
   const noField = sampleDoc();
   delete noField.field;
-  check('refuses a course with no field', Boolean(inspectDocument(noField).error));
+  check('refuses a track with no field', Boolean(inspectDocument(noField).error));
   /*
    * gates is the count of things you FLY THROUGH, not the length of the
    * flying order: a waypoint pins the line and nothing stands there. This
@@ -132,7 +132,7 @@ async function testValidate() {
   }));
   check('a waypoint in the order is not a gate', !withWaypoint.error && withWaypoint.gates === 1);
   /*
-   * MIRROR CHECK. layoutHash decides whether a republished course keeps its
+   * MIRROR CHECK. layoutHash decides whether a republished track keeps its
    * times, and the simulator's layoutFingerprint predicts that answer so it
    * can warn first. They hash differently on purpose; they must agree on
    * which keys ARE the layout. If this list changes, change
@@ -155,8 +155,8 @@ async function testValidate() {
   check('keeps an embedded logo', !withLogo.error && withLogo.hasLogo);
 
   /*
-   * FIVE MARKS. A schemaVersion 2 course spells its branding as a list, and
-   * the board has to read both spellings: the old one, because courses
+   * FIVE MARKS. A schemaVersion 2 track spells its branding as a list, and
+   * the board has to read both spellings: the old one, because tracks
    * published under it are already stored, and the new one, because that is
    * what a current builder writes.
    */
@@ -167,10 +167,10 @@ async function testValidate() {
   const v2 = sampleDoc('trk-1a2b3c4d', { logos: logos(5) });
   v2.schemaVersion = 2;
   const five = inspectDocument(v2);
-  check('accepts a schema 2 course with five logos', !five.error && five.logoCount === 5);
+  check('accepts a schema 2 track with five logos', !five.error && five.logoCount === 5);
   const v3 = sampleDoc('trk-1a2b3c4d');
   v3.schemaVersion = 3;
-  check('refuses a schema 3 course', Boolean(inspectDocument(v3).error));
+  check('refuses a schema 3 track', Boolean(inspectDocument(v3).error));
   const six = sampleDoc('trk-1a2b3c4d', { logos: logos(6) });
   six.schemaVersion = 2;
   check('refuses a sixth logo', Boolean(inspectDocument(six).error));
@@ -184,7 +184,7 @@ async function testValidate() {
   check('refuses a remote logo in the list', Boolean(inspectDocument(remoteInList).error));
 
   /*
-   * PAINT IS NOT LAYOUT. Selling a sponsor a place on a course that people
+   * PAINT IS NOT LAYOUT. Selling a sponsor a place on a track that people
    * have already flown must not clear the times on it, so a ground logo is
    * filtered out of the layout hash. MIRRORS LAYOUT_SKIP in the simulator's
    * src/share/listing.js: change one and change the other.
@@ -416,7 +416,7 @@ async function testStore() {
   const legacyBugs = await legacy.listBugs();
   check('a board.json without bugs still lists an empty ticket list', Array.isArray(legacyBugs) && legacyBugs.length === 0);
   const stillTracks = await legacy.listTracks();
-  check('a board.json without bugs still lists courses', Array.isArray(stillTracks) && stillTracks.length === 0);
+  check('a board.json without bugs still lists tracks', Array.isArray(stillTracks) && stillTracks.length === 0);
   await rm(legacyDir, { recursive: true, force: true });
 }
 
@@ -552,7 +552,7 @@ async function testHttp() {
     const cardFn = app.slice(app.indexOf('function cardFor('));
     const attach = cardFn.indexOf('card.append(body)');
     const paint = cardFn.indexOf('paintPodium(');
-    check('a course card is attached before its times are painted', attach !== -1 && paint !== -1 && attach < paint);
+    check('a track card is attached before its times are painted', attach !== -1 && paint !== -1 && attach < paint);
     const cfg = await fetch('http://127.0.0.1:3199/api/config').then((r) => r.json());
     check('config names the simulator', cfg.simOrigin === 'http://127.0.0.1:8000');
     /*
@@ -643,7 +643,7 @@ async function testHttp() {
     const proto = await fetch('http://127.0.0.1:3199/api/bugs/constructor');
     check('a non-ticket id is not a 500', proto.status === 400 || proto.status === 404);
     const stillBoard = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
-    check('filing a bug does not drop courses', stillBoard.tracks[0].id === 'trk-1a2b3c4d' && stillBoard.tracks[0].best.lapMs === 29110);
+    check('filing a bug does not drop tracks', stillBoard.tracks[0].id === 'trk-1a2b3c4d' && stillBoard.tracks[0].best.lapMs === 29110);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });
@@ -671,7 +671,7 @@ function testOrigins() {
     guessSimOrigin(...at('http://127.0.0.1:3100/')) === 'http://127.0.0.1:8000');
   check('localhost by name, same answer',
     guessSimOrigin(...at('http://localhost:3100/')) === 'http://localhost:8000');
-  check('a course hash does not change the answer',
+  check('a track hash does not change the answer',
     guessSimOrigin(...at('http://127.0.0.1:3100/#course=trk-1a2b3c4d')) === 'http://127.0.0.1:8000');
 
   check('the /board mount finds its sibling /sim',

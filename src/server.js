@@ -2,7 +2,7 @@
  * server.js: the public board.
  *
  * A static page and a small JSON API. The page lists every published
- * course. Expanding one shows its times. Fly opens the simulator in
+ * track. Expanding one shows its times. Fly opens the simulator in
  * another tab with ?share=id, which is the only link the two sites
  * need. Publish and post-time are the writes. Testers also POST bug
  * tickets here; agents GET them.
@@ -108,10 +108,10 @@ function decodePathPart(raw) {
 }
 
 /*
- * A course id out of the path, or null. The shape check is not decoration.
- * The file store keeps its courses in a plain object, so an id of
+ * A track id out of the path, or null. The shape check is not decoration.
+ * The file store keeps its tracks in a plain object, so an id of
  * 'constructor' or '__proto__' used to find something on Object.prototype:
- * the lookup came back truthy and the request went on to read a course out
+ * the lookup came back truthy and the request went on to read a track out
  * of a function, which is a 500 rather than the 404 it should be. Every id
  * the board holds passed this same expression through inspectDocument at
  * publish time, so nothing real can fail it.
@@ -195,18 +195,18 @@ function recordBugHit(ip) {
 /*
  * 660_000, up from 500_000. The publish route is the only caller that takes
  * the default, and what it carries is a document capped at MAX_DOCUMENT_CHARS
- * in validate.js, which grew when a course went from one sponsor's logo to
+ * in validate.js, which grew when a track went from one sponsor's logo to
  * five. This has to stay above that cap plus the envelope the document
- * travels in (author, edit key, JSON string escaping), or a course that
+ * travels in (author, edit key, JSON string escaping), or a track that
  * validate.js would accept is refused here before anything reads it, and
  * the message would blame its size rather than this number. The other two
  * callers pass their own, much smaller, limits.
  *
  * tooBig is the message for THIS route's payload. It used to be hardcoded
  * to the publish wording, so a tester whose bug context ran long was told
- * their course was too large to publish, from a form with no course in it.
+ * their track was too large to publish, from a form with no track in it.
  */
-async function readBody(req, limit = 660_000, tooBig = 'That course is too large to publish.') {
+async function readBody(req, limit = 660_000, tooBig = 'That track is too large to publish.') {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -256,7 +256,7 @@ async function handleApi(req, res, url) {
     }
     const track = await store.getTrack(id);
     if (!track) {
-      send(res, 404, { error: 'That course is not on the board.' });
+      send(res, 404, { error: 'That track is not on the board.' });
       return;
     }
     send(res, 200, track);
@@ -272,7 +272,7 @@ async function handleApi(req, res, url) {
     }
     const payload = await store.getDocument(id);
     if (!payload) {
-      send(res, 404, { error: 'That course is not on the board.' });
+      send(res, 404, { error: 'That track is not on the board.' });
       return;
     }
     send(res, 200, payload);
@@ -301,7 +301,7 @@ async function handleApi(req, res, url) {
     }
     const author = normaliseName(body.author);
     if (!author) {
-      send(res, 400, { error: 'A published course needs a name, two to twenty four letters, numbers, spaces, dots, underscores or hyphens.' });
+      send(res, 400, { error: 'A published track needs a name, two to twenty four letters, numbers, spaces, dots, underscores or hyphens.' });
       return;
     }
     const inspected = inspectDocument(body.document);

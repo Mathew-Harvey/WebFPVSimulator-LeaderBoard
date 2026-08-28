@@ -1,5 +1,5 @@
 /*
- * store.js: published courses and their times.
+ * store.js: published tracks and their times.
  *
  * Postgres when DATABASE_URL is set, a JSON file when it is not. The two
  * backends answer the same methods so the rest of the server never asks
@@ -47,7 +47,7 @@ function newTimeId() {
 
 /*
  * A time row as the API shows it in a list: the ghost blob itself never
- * travels with a track, only the fact that one exists, or a course with
+ * travels with a track, only the fact that one exists, or a track with
  * forty recorded laps would weigh megabytes on every open of its sheet.
  * Rows from before ghosts have no public id; they read as unfetchable,
  * which they are.
@@ -120,7 +120,7 @@ async function writeAtomic(path, contents) {
 
 function livePlan(track) {
   /* Rebuilt from the document on every list, so a drawing fix does not
-   * wait for every course to be republished. */
+   * wait for every track to be republished. */
   if (track && track.document) {
     return planFromDocument(track.document);
   }
@@ -139,7 +139,7 @@ function byLap(a, b) {
 
 /* One 409, so the three publish paths cannot word it three ways. */
 const CONFLICT = {
-  error: 'This course is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
+  error: 'This track is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
   status: 409,
   conflict: true,
 };
@@ -312,7 +312,7 @@ class FileStore {
   async addTimeUnlocked({ trackId, name, lapMs, ghost }) {
     const track = this.data.tracks[trackId];
     if (!track) {
-      return { error: 'That course is not on the board.', status: 404 };
+      return { error: 'That track is not on the board.', status: 404 };
     }
     let id = newTimeId();
     while (this.hasTimeId(id)) {
@@ -445,8 +445,8 @@ class PgStore {
       [id],
     );
     /* `best` too. The file store's getTrack returns it through summaryOf
-     * and the board's course sheet reads it, so leaving it out here made
-     * the same course render differently depending on the backend. */
+     * and the board's track sheet reads it, so leaving it out here made
+     * the same track render differently depending on the backend. */
     const rows = times.rows;
     return {
       ...rowToSummary(found.rows[0]),
@@ -557,7 +557,7 @@ class PgStore {
       const found = await client.query('SELECT id FROM tracks WHERE id = $1 FOR UPDATE', [trackId]);
       if (!found.rowCount) {
         await client.query('ROLLBACK');
-        return { error: 'That course is not on the board.', status: 404 };
+        return { error: 'That track is not on the board.', status: 404 };
       }
       const inserted = await client.query(
         `INSERT INTO times (track_id, public_id, name, lap_ms, ghost, posted_utc)
