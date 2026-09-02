@@ -579,3 +579,236 @@ export function inspectBugPatch(body) {
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* Tags                                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * THE TAG VOCABULARY, AND WHY IT IS CLOSED.
+ *
+ * A tag exists so that a visitor looking for one kind of track can stop
+ * looking at the other kinds. That only works if the same idea is spelled
+ * the same way by everybody, and free text does not do that: a board with
+ * "race", "racing", "Race Track" and "racetrack" on it has four tags and no
+ * filter. So the board decides the list and the builder offers exactly it.
+ *
+ * The three the owner named are the three kinds of thing people actually
+ * build, and they are about the AUTHOR'S INTENT rather than about the
+ * geometry, because intent is the thing a visitor is choosing between and
+ * the geometry is already on the card as a gate count and a field size.
+ *
+ *   race        built to be raced against a clock
+ *   skills      built to practise one thing until it is easy
+ *   experiment  built to find out whether something works
+ *
+ * The rest are the shapes that kept turning up in the tracks already
+ * published and that the three above cannot say:
+ *
+ *   beginner, technical   how hard, which is the first thing anybody asks
+ *   micro, big            how much room it wants, which decides whether it
+ *                         is flyable at all on a small screen at speed
+ *   freestyle             gates as furniture rather than as a course
+ *   showcase              built to be looked at
+ *
+ * `label` is what the board and the builder print. `id` is what travels and
+ * never changes: renaming a label must never orphan a published track.
+ * Adding an id is additive and needs no migration; REMOVING one would strand
+ * tracks that carry it, so a retired tag keeps its row and loses its offer.
+ */
+export const TAGS = [
+  { id: 'race', label: 'Race track' },
+  { id: 'skills', label: 'Skills practice' },
+  { id: 'experiment', label: 'Experiment' },
+  { id: 'freestyle', label: 'Freestyle' },
+  { id: 'beginner', label: 'Beginner' },
+  { id: 'technical', label: 'Technical' },
+  { id: 'micro', label: 'Micro' },
+  { id: 'big', label: 'Big field' },
+  { id: 'showcase', label: 'Showcase' },
+];
+
+const TAG_IDS = new Set(TAGS.map((t) => t.id));
+
+/*
+ * At most this many on one track. Five is the point past which a tag stops
+ * narrowing anything: a track wearing every tag answers every filter, which
+ * is the same as wearing none, and it is how an author games a list.
+ */
+export const TAGS_MAX = 5;
+
+/*
+ * Clean a tag list, or refuse it.
+ *
+ * Returns { tags } or { error }. An absent list is an empty list and is
+ * fine: tags are optional and every track published before they existed
+ * has none. An unknown id is refused rather than dropped, because a builder
+ * that offered it and a board that ignored it would disagree silently and
+ * the author would never learn their tag did not stick.
+ */
+export function inspectTags(raw) {
+  if (raw == null) {
+    return { tags: [] };
+  }
+  if (!Array.isArray(raw)) {
+    return { error: 'Tags are a list.' };
+  }
+  if (raw.length > TAGS_MAX) {
+    return { error: `A track wears at most ${TAGS_MAX} tags.` };
+  }
+  const out = [];
+  for (const entry of raw) {
+    const id = String(entry ?? '').trim().toLowerCase();
+    if (!TAG_IDS.has(id)) {
+      return { error: `There is no tag called "${String(entry ?? '').slice(0, 24)}".` };
+    }
+    if (!out.includes(id)) {
+      out.push(id);
+    }
+  }
+  /* Stored in the board's own order rather than the order they were ticked,
+   * so two tracks wearing the same tags carry the same list and a card
+   * cannot read differently from one publish to the next. */
+  return { tags: TAGS.filter((t) => out.includes(t.id)).map((t) => t.id) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Freestyle runs                                                      */
+/* ------------------------------------------------------------------ */
+
+export const RUN_ID_RE = /^run-[0-9a-f]{8}$/;
+
+/*
+ * WHAT THE BOARD CAN AND CANNOT KNOW ABOUT A SCORE.
+ *
+ * It cannot recompute one. Doing that would mean importing the simulator's
+ * recogniser, its catalogue and its plant, and this file imports nothing
+ * from the simulator on purpose: the board is a place to put things, not a
+ * second implementation of the game. So every number below is CLAIMED by
+ * the page that posted it, and nothing here should be written or read as if
+ * it had been verified.
+ *
+ * What it can do is bound the claim and check it against itself, which is
+ * exactly what inspectGhost does for a recorded lap. A run that says it
+ * landed four tricks and scored a billion is refused, not because the board
+ * knows what those four tricks were, but because no four tricks can be
+ * worth that under rules the board can state in one line. That catches the
+ * careless and the curious. It does not catch somebody determined, and the
+ * README says so rather than implying otherwise.
+ */
+
+/* The map a run was flown on. One today, and it is a list rather than a
+ * constant so the second one is a line here and not a migration. */
+export const RUN_MAPS = ['city'];
+
+/*
+ * The two physics models the simulator offers, which is not a cosmetic
+ * setting: arcade turns off propwash, gyro noise and build asymmetry, so an
+ * arcade run and an expert run are not the same sport. The board records
+ * which and lets a reader filter, rather than quietly ranking them together
+ * and letting somebody find out later.
+ */
+export const RUN_STYLES = ['expert', 'arcade'];
+
+/* A run is two minutes of simulated time. The slack is generous because the
+ * clock stops on the trick that ended the run, not on the millisecond, and
+ * because a future map may want a different heat length. */
+const RUN_MS_MIN = 1_000;
+const RUN_MS_MAX = 900_000;
+const RUN_TRICKS_MAX = 600;
+const SIGNATURE_MAX = 40;
+
+/*
+ * The most a run of `tricks` tricks could possibly be worth, derived rather
+ * than picked.
+ *
+ * The dearest trick in the simulator's catalogue is 850 points. The streak
+ * multiplier grows by the previous trick's raw score over ten thousand, so
+ * after n tricks it is at most 1 + n * 850 / 10000. The combo multiplier is
+ * capped at twelve. Nothing else in the scorer multiplies. So no single
+ * trick can be worth more than 850 * (1 + n * 0.085) * 12, and no run of n
+ * tricks more than n times that.
+ *
+ * This is a loose bound and it is meant to be: its job is to refuse a
+ * number that could not have come from the game at all, not to guess what a
+ * good run looks like. Every real run measured while this was written came
+ * in three orders of magnitude under it.
+ */
+export function maxPlausibleScore(tricks) {
+  const n = tricks > 0 ? tricks : 1;
+  return Math.ceil(n * 850 * (1 + n * 0.085) * 12);
+}
+
+function counted(raw, max) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > max) {
+    return null;
+  }
+  return Math.round(raw);
+}
+
+/*
+ * Check a posted run. Returns the row the store should keep, or { error }.
+ *
+ * Every field is checked, including the ones only the display reads, because
+ * a field that is stored unchecked is a field that reaches every visitor's
+ * browser unchecked.
+ */
+export function inspectRun(body) {
+  if (!isObject(body)) {
+    return { error: 'That request was not a JSON object.' };
+  }
+  const name = normaliseName(body.name);
+  if (!name) {
+    return { error: 'A pilot name is 2 to 24 letters, digits, dots, dashes or spaces.' };
+  }
+  const map = String(body.map ?? '');
+  if (!RUN_MAPS.includes(map)) {
+    return { error: 'That is not a map this board keeps scores for.' };
+  }
+  const style = String(body.style ?? '');
+  if (!RUN_STYLES.includes(style)) {
+    return { error: 'A run is flown on the expert or the arcade physics model.' };
+  }
+  const durationMs = counted(body.durationMs, RUN_MS_MAX);
+  if (durationMs == null || durationMs < RUN_MS_MIN) {
+    return { error: 'That run is not long enough to be a run.' };
+  }
+  const tricks = counted(body.tricks, RUN_TRICKS_MAX);
+  if (tricks == null || tricks < 1) {
+    return { error: 'A run with no tricks in it is not a score.' };
+  }
+  const unique = counted(body.unique, RUN_TRICKS_MAX);
+  if (unique == null || unique < 1 || unique > tricks) {
+    return { error: 'A run cannot have more distinct tricks than tricks.' };
+  }
+  const ceiling = maxPlausibleScore(tricks);
+  const score = counted(body.score, ceiling);
+  if (score == null || score < 1) {
+    return { error: 'That score could not have come from that many tricks.' };
+  }
+  const bestCombo = counted(body.bestCombo, ceiling);
+  if (bestCombo == null || bestCombo > score) {
+    return { error: 'The best chain in a run cannot be worth more than the run.' };
+  }
+  const bestTrick = counted(body.bestTrick, ceiling);
+  if (bestTrick == null || bestTrick > score) {
+    return { error: 'One trick in a run cannot be worth more than the run.' };
+  }
+  const crashes = counted(body.crashes, RUN_TRICKS_MAX);
+  if (crashes == null) {
+    return { error: 'That crash count is not a count.' };
+  }
+  /* The one trick the run is remembered by. Free text, because it is a name
+   * out of a catalogue this file deliberately does not hold, so it is
+   * bounded and stripped rather than checked against a list. */
+  const signature = String(body.signature ?? '')
+    .replace(/[^\x20-\x7e]/g, '')
+    .trim()
+    .slice(0, SIGNATURE_MAX);
+  return {
+    run: {
+      name, map, style, score, durationMs, tricks, unique,
+      bestCombo, bestTrick, crashes, signature,
+    },
+  };
+}

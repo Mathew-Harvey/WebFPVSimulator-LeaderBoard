@@ -306,9 +306,34 @@ const state = {
   timesById: new Map(),
   query: '',
   sort: 'flown',
+  /* The tag filter is a SET and the rule is AND, not OR. A reader who ticks
+   * "skills" and "beginner" is asking for a track that is both, because
+   * that is what a reader ticking two boxes means, and OR would hand back
+   * more results than one box alone which reads as the filter not working. */
+  tags: new Set(),
+  author: '',
+  /* The freestyle board. `runs` is null until the fetch answers, which the
+   * painter tells apart from an empty board: nothing yet posted and not
+   * loaded yet are different sentences. */
+  runs: null,
+  runsError: '',
+  style: '',
+  view: 'tracks',
   openId: null,
   lastFocus: null,
 };
+
+/* The tag vocabulary, as the board describes it. Served rather than written
+ * down here, so the list this page offers and the list the board accepts
+ * cannot drift: validate.js is the copy of record. Empty until /api/runs
+ * answers, which is why the tag bar paints from the tracks rather than
+ * appearing before them. */
+let TAGS = [];
+const TAG_LABEL = new Map();
+
+function tagLabel(id) {
+  return TAG_LABEL.get(id) || id;
+}
 
 function courseById(id) {
   return state.courses.find((t) => t.id === id) || null;
@@ -373,10 +398,48 @@ function matches(track, needle) {
   return Boolean(times && times.some((row) => String(row.name).toLowerCase().includes(needle)));
 }
 
-function visibleCourses() {
+function tagsOf(track) {
+  return Array.isArray(track.tags) ? track.tags : [];
+}
+
+/* Every tag actually in use, with how many tracks wear it. Counted over the
+ * tracks the OTHER filters leave standing, so ticking an author greys out
+ * the tags that author never used rather than offering an empty result. */
+function tagCounts(pool) {
+  const by = new Map();
+  for (const track of pool) {
+    for (const id of tagsOf(track)) {
+      by.set(id, (by.get(id) || 0) + 1);
+    }
+  }
+  return by;
+}
+
+/* The authors on the board, most tracks first, then alphabetical. */
+function authors() {
+  const by = new Map();
+  for (const track of state.courses) {
+    const name = String(track.author || '');
+    by.set(name, (by.get(name) || 0) + 1);
+  }
+  return [...by.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+}
+
+/* Everything except the tag filter, which the tag counts are measured
+ * against so a tag can be greyed out rather than lead nowhere. */
+function poolBeforeTags() {
   const needle = state.query.trim().toLowerCase();
+  return state.courses.filter((t) => matches(t, needle)
+    && (!state.author || String(t.author) === state.author));
+}
+
+function visibleCourses() {
   const compare = SORTS[state.sort] || SORTS.flown;
-  return state.courses.filter((t) => matches(t, needle)).sort(compare);
+  const wanted = [...state.tags];
+  return poolBeforeTags()
+    .filter((t) => wanted.every((id) => tagsOf(t).includes(id)))
+    .sort(compare);
 }
 
 /* ------------------------------------------------------------------ */
@@ -420,6 +483,15 @@ function cardFor(track, config) {
   record.append(el('div', 'record-holder', track.best ? track.best.name : ''));
   head.append(record);
   body.append(head);
+
+  /* What the author says it is for. Above the times rather than below,
+   * because it is the thing that decides whether a reader wants this track
+   * at all and the times are the thing they read once they do. */
+  const tags = el('div', 'tags');
+  for (const id of tagsOf(track)) {
+    tags.append(el('span', null, tagLabel(id)));
+  }
+  body.append(tags);
 
   const podium = el('ol', 'podium');
   podium.hidden = true;
@@ -544,23 +616,115 @@ function paintGrid() {
       : `${shown.length} of ${plural(state.courses.length, 'track', 'tracks')}`;
   }
   if (!shown.length && state.courses.length) {
+    /*
+     * Say WHICH filter emptied the list. There are three of them now, and
+     * "nothing matches that" in front of a reader who set a search two
+     * minutes ago and an author just now does not say which one to undo.
+     */
+    const parts = [];
+    if (state.query.trim()) {
+      parts.push(`the search "${state.query.trim()}"`);
+    }
+    if (state.author) {
+      parts.push(`tracks built by ${state.author}`);
+    }
+    if (state.tags.size) {
+      parts.push(`${[...state.tags].map(tagLabel).join(' and ')}`);
+    }
     const box = el('div', 'empty panel');
     box.append(el('h2', null, 'Nothing matches that'));
-    box.append(el('p', null, `No track or pilot on the board answers to "${state.query.trim()}".`));
-    const clear = el('button', 'btn small', 'Clear the search');
+    box.append(el('p', null, parts.length
+      ? `No track on the board is ${joined(parts)}.`
+      : 'No track on the board answers to that.'));
+    const clear = el('button', 'btn small', 'Clear the filters');
     clear.type = 'button';
     clear.addEventListener('click', () => {
       const find = byId('find');
+      const by = byId('by');
       state.query = '';
+      state.author = '';
+      state.tags.clear();
       if (find) {
         find.value = '';
+      }
+      if (by) {
+        by.value = '';
+      }
+      paintTags();
+      paintGrid();
+      if (find) {
         find.focus();
       }
-      paintGrid();
     });
     box.append(clear);
     notice.append(box);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* The tag bar and the author list                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A closed vocabulary is what makes a filter possible, so the bar is the
+ * whole list rather than the tags that happen to be in use: a reader can
+ * see that "Showcase" exists and that nobody has built one, which is more
+ * useful than the tag not being there. A tag no track wears is disabled
+ * rather than hidden, so the bar does not reflow every time a filter moves.
+ */
+function paintTags() {
+  const bar = byId('tagbar');
+  if (!bar) {
+    return;
+  }
+  const counts = tagCounts(poolBeforeTags());
+  bar.textContent = '';
+  bar.hidden = TAGS.length === 0;
+  for (const tag of TAGS) {
+    const n = counts.get(tag.id) || 0;
+    const on = state.tags.has(tag.id);
+    const btn = el('button', 'tag');
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    /* A tag nobody wears is still pressable if it is already ON, or a
+     * reader could tick their way into a filter they cannot untick. */
+    btn.disabled = n === 0 && !on;
+    btn.append(el('span', null, tag.label));
+    btn.append(el('span', 'n', String(n)));
+    btn.addEventListener('click', () => {
+      if (state.tags.has(tag.id)) {
+        state.tags.delete(tag.id);
+      } else {
+        state.tags.add(tag.id);
+      }
+      paintTags();
+      paintGrid();
+    });
+    bar.append(btn);
+  }
+}
+
+function paintAuthors() {
+  const select = byId('by');
+  if (!select) {
+    return;
+  }
+  const held = state.author;
+  select.textContent = '';
+  const any = document.createElement('option');
+  any.value = '';
+  any.textContent = 'Anyone';
+  select.append(any);
+  for (const [name, n] of authors()) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = n > 1 ? `${name} (${n})` : name;
+    select.append(opt);
+  }
+  /* An author who deleted their last track between paints must not leave
+   * the filter pointing at a name with nothing behind it. */
+  select.value = [...select.options].some((o) => o.value === held) ? held : '';
+  state.author = select.value;
 }
 
 /* ------------------------------------------------------------------ */
@@ -703,6 +867,7 @@ function paintStats() {
         plural(n, 'track', 'tracks'),
         plural(times, 'time', 'times'),
         pilots ? plural(pilots, 'pilot', 'pilots') : '',
+        state.runs && state.runs.length ? plural(state.runs.length, 'run', 'runs') : '',
       ])
       : '';
   }
@@ -757,6 +922,228 @@ async function hydrate() {
   }));
   paintRail();
   paintStats();
+  paintSwitch();
+}
+
+/* ------------------------------------------------------------------ */
+/* The freestyle board                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A score, with thousands separators and no locale. Same reason the
+ * simulator's formatScore does it by hand: a score reads the same way in
+ * every language this ships in, and Intl builds a formatter object per
+ * call for a job that is a loop over three characters.
+ */
+function formatScore(n) {
+  let digits = String(Math.round(Math.abs(Number(n) || 0)));
+  let out = '';
+  while (digits.length > 3) {
+    out = `,${digits.slice(-3)}${out}`;
+    digits = digits.slice(0, -3);
+  }
+  return digits + out;
+}
+
+/* 2:00, from the run's own clock. A run is two minutes, so this is almost
+ * always the same string, and it is printed anyway because a run that ended
+ * early is exactly the case a reader wants to see. */
+function formatRunTime(ms) {
+  const total = Math.round((Number(ms) || 0) / 1000);
+  const m = Math.floor(total / 60);
+  return `${m}:${String(total - m * 60).padStart(2, '0')}`;
+}
+
+function freestyleHref(config) {
+  return `${config.simOrigin}/?map=city&board=${encodeURIComponent(config.boardOrigin)}`;
+}
+
+function visibleRuns() {
+  const runs = state.runs || [];
+  return state.style ? runs.filter((r) => r.style === state.style) : runs;
+}
+
+/*
+ * One high score row.
+ *
+ * The first line is the arcade: rank, name, a dot leader, a score, all
+ * fixed pitch and all upper case. The second is prose in the page's own
+ * voice, because "31 tricks, best chain 9,100" is a sentence about a run
+ * and not a readout, and putting it in the cabinet's face too would make
+ * the row shout twice.
+ */
+function runRow(run, i) {
+  const li = el('li', `hs-row${i < 3 ? ` top${i + 1}` : ''}`);
+  li.append(el('span', 'hs-rank', String(i + 1).padStart(2, '0')));
+  li.append(el('span', 'hs-name', run.name));
+  li.append(el('span', 'hs-dots'));
+  li.append(el('span', 'hs-score', formatScore(run.score)));
+
+  const of = el('p', 'hs-of');
+  const bits = [];
+  bits.push(`${plural(run.tricks, 'trick', 'tricks')}, ${run.unique} of them different`);
+  if (run.bestCombo > 0) {
+    bits.push(`best chain ${formatScore(run.bestCombo)}`);
+  }
+  if (run.signature) {
+    bits.push(`biggest was a ${run.signature}`);
+  }
+  bits.push(run.crashes === 0 ? 'no crashes' : plural(run.crashes, 'crash', 'crashes'));
+  bits.push(formatRunTime(run.durationMs));
+  of.append(joined(bits));
+  /*
+   * The physics model, named rather than ranked separately. Arcade turns
+   * off propwash, gyro noise and build asymmetry, so it is an easier
+   * machine and an arcade run is not the same sport as an expert one.
+   * Hiding that and ranking them together would be the board lying by
+   * omission; a separate table would split a small board in half. So both
+   * are here, both are labelled, and the reader has a filter.
+   */
+  const model = el('span', `hs-model${run.style === 'arcade' ? ' easy' : ''}`, run.style);
+  model.title = run.style === 'arcade'
+    ? 'Flown on the arcade physics model: no propwash, no gyro noise, no build asymmetry'
+    : 'Flown on the full physics model';
+  of.append(model);
+  of.append(` \u00b7 ${formatAgo(run.postedUtc)}`);
+  li.append(of);
+  return li;
+}
+
+function paintArcade() {
+  const host = byId('arcade-board');
+  const countCell = byId('run-count');
+  if (!host) {
+    return;
+  }
+  host.textContent = '';
+  const config = state.config;
+
+  if (state.runs === null) {
+    host.append(el('div', 'screenbox', state.runsError || 'Reading the board.'));
+    if (countCell) {
+      countCell.textContent = '';
+    }
+    return;
+  }
+
+  const runs = visibleRuns();
+  if (countCell) {
+    countCell.textContent = runs.length === (state.runs || []).length
+      ? plural(runs.length, 'run', 'runs')
+      : `${runs.length} of ${plural(state.runs.length, 'run', 'runs')}`;
+  }
+
+  const screen = el('div', 'screenbox');
+  if (!runs.length) {
+    const empty = el('div', 'hs-empty');
+    /*
+     * The one blinking thing on the page, and it is the one an arcade
+     * cabinet blinks: the prompt on an empty attract screen. It carries
+     * nothing the paragraph under it does not say, so reduced motion
+     * stopping it hides no meaning.
+     */
+    empty.append(el('span', 'coin', state.style ? 'No runs on that model' : 'Be the first'));
+    empty.append(el('p', null, state.style
+      ? 'Nobody has posted a run on that physics model yet. Try both, or go and fly one.'
+      : 'Nobody has posted a freestyle run yet. Open the town, fly for two minutes, and put your name at the top of an empty board.'));
+    const actions = el('div', 'actions');
+    const fly = el('a', 'btn primary', 'Fly the town');
+    fly.href = freestyleHref(config);
+    fly.target = SIM_WINDOW;
+    actions.append(fly);
+    empty.append(actions);
+    screen.append(empty);
+    host.append(screen);
+    return;
+  }
+
+  const list = el('ol', 'hs');
+  runs.forEach((run, i) => list.append(runRow(run, i)));
+  screen.append(list);
+  host.append(screen);
+
+  const foot = el('div', 'hs-foot');
+  foot.append(el('p', null, 'One entry per pilot, and only your best. Scores are what the simulator reports, so they are as honest as the pilot who posted them.'));
+  const fly = el('a', 'btn primary', 'Fly a run');
+  fly.href = freestyleHref(config);
+  fly.target = SIM_WINDOW;
+  foot.append(fly);
+  host.append(foot);
+}
+
+/* ------------------------------------------------------------------ */
+/* The switch between the two boards                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * ?view=freestyle, not #freestyle. route() owns the hash and clearHash()
+ * wipes it whole, so a hash tab would be thrown away by Escape and by the
+ * sheet's Close button. The query string survives both, and a track sheet
+ * therefore still opens over either board and closes back onto it.
+ */
+function viewFromUrl() {
+  try {
+    return new URLSearchParams(window.location.search).get('view') === 'freestyle'
+      ? 'freestyle'
+      : 'tracks';
+  } catch (e) {
+    return 'tracks';
+  }
+}
+
+function writeView(view) {
+  try {
+    const url = new URL(window.location.href);
+    if (view === 'freestyle') {
+      url.searchParams.set('view', 'freestyle');
+    } else {
+      url.searchParams.delete('view');
+    }
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch (e) {
+    /* No history, as in a very old browser. The page still works. */
+  }
+}
+
+function showView(view, { write = true } = {}) {
+  state.view = view === 'freestyle' ? 'freestyle' : 'tracks';
+  const on = state.view === 'freestyle';
+  const tracks = byId('view-tracks');
+  const free = byId('view-freestyle');
+  if (tracks) {
+    tracks.hidden = on;
+  }
+  if (free) {
+    free.hidden = !on;
+  }
+  for (const [id, lit] of [['switch-tracks', !on], ['switch-freestyle', on]]) {
+    const btn = byId(id);
+    if (btn) {
+      btn.classList.toggle('is-on', lit);
+      btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
+    }
+  }
+  if (write) {
+    writeView(state.view);
+  }
+  if (on) {
+    paintArcade();
+  }
+}
+
+function paintSwitch() {
+  const tracksCell = byId('switch-tracks-count');
+  const runsCell = byId('switch-runs-count');
+  if (tracksCell) {
+    tracksCell.textContent = state.courses.length
+      ? plural(state.courses.length, 'track', 'tracks')
+      : '';
+  }
+  if (runsCell) {
+    runsCell.textContent = state.runs && state.runs.length
+      ? plural(state.runs.length, 'run', 'runs')
+      : '';
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -904,6 +1291,11 @@ async function paintSheet(track) {
 
   const facts = byId('sheet-facts');
   facts.textContent = '';
+  /* First, because it is what the track is FOR, and the gate count and the
+   * field size are what it is made of. */
+  if (tagsOf(track).length) {
+    factRow(facts, 'Built for', tagsOf(track).map(tagLabel).join(', '));
+  }
   factRow(facts, 'Gates', plural(track.gates, 'gate', 'gates'));
   factRow(facts, 'Elements', track.elements);
   factRow(facts, 'Field', fieldSize(track));
@@ -1094,9 +1486,13 @@ function bindLinks(config) {
 function bindToolbar() {
   const find = byId('find');
   const sort = byId('sort');
+  const by = byId('by');
   if (find) {
     find.addEventListener('input', () => {
       state.query = find.value;
+      /* The tag counts are measured against everything the OTHER filters
+       * leave standing, so they move when the search does. */
+      paintTags();
       paintGrid();
     });
     find.addEventListener('keydown', (e) => {
@@ -1104,6 +1500,7 @@ function bindToolbar() {
         e.stopPropagation();
         find.value = '';
         state.query = '';
+        paintTags();
         paintGrid();
       }
     });
@@ -1114,6 +1511,70 @@ function bindToolbar() {
       state.sort = sort.value;
       paintGrid();
     });
+  }
+  if (by) {
+    by.addEventListener('change', () => {
+      state.author = by.value;
+      paintTags();
+      paintGrid();
+    });
+  }
+}
+
+function bindSwitch() {
+  for (const [id, view] of [['switch-tracks', 'tracks'], ['switch-freestyle', 'freestyle']]) {
+    const btn = byId(id);
+    if (btn) {
+      btn.addEventListener('click', () => showView(view));
+    }
+  }
+  const style = byId('style');
+  if (style) {
+    style.value = state.style;
+    style.addEventListener('change', () => {
+      state.style = style.value;
+      paintArcade();
+    });
+  }
+}
+
+/*
+ * The freestyle board, fetched once. It is NOT fatal and it is not awaited
+ * before the tracks paint: a board whose freestyle table is down should
+ * still show forty tracks, and the switch says how many runs there are so
+ * it has to be able to say none.
+ */
+async function loadRuns() {
+  try {
+    const res = await fetch(here('api/runs'));
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `The board answered ${res.status}.`);
+    }
+    state.runs = body.runs || [];
+    /* The tag vocabulary rides along with this request rather than having
+     * one of its own: it is small, it is served from the same file that
+     * decides which tags are legal, and one request is one request. */
+    if (Array.isArray(body.tags) && body.tags.length) {
+      TAGS = body.tags;
+      TAG_LABEL.clear();
+      for (const tag of TAGS) {
+        TAG_LABEL.set(tag.id, tag.label);
+      }
+    }
+  } catch (e) {
+    state.runs = null;
+    state.runsError = e.message || 'The freestyle board could not be loaded.';
+  }
+  paintSwitch();
+  paintTags();
+  /* Repaint the cards, because the tag labels arrived with this request and
+   * the cards drew their tags before they had names for them. */
+  if (state.courses.length) {
+    paintGrid();
+  }
+  if (state.view === 'freestyle') {
+    paintArcade();
   }
 }
 
@@ -1239,6 +1700,20 @@ async function start() {
   bindLinks(state.config);
 
   /*
+   * THE SWITCH IS BOUND AND SHOWN BEFORE ANYTHING IS FETCHED.
+   *
+   * start() returns early in three places below, on a failed tracks
+   * request and on an empty board, and an empty board is exactly the board
+   * a new feature launches on. A freestyle section wired after those
+   * returns would be invisible on the one board that most needs it, so it
+   * is wired here, before the first request, and the runs request is fired
+   * without being awaited.
+   */
+  bindSwitch();
+  showView(viewFromUrl(), { write: false });
+  const runsLoaded = loadRuns();
+
+  /*
    * The config request is NOT fatal, and the tracks request is.
    *
    * They used to share one try, so a 500 on config threw the whole page away
@@ -1266,10 +1741,12 @@ async function start() {
   } catch (e) {
     list.textContent = '';
     notice.append(el('div', 'status panel', e.message || 'The board could not be loaded.'));
+    await runsLoaded;
     return;
   }
 
   paintStats();
+  paintSwitch();
   if (!state.courses.length) {
     list.textContent = '';
     const box = el('div', 'empty panel');
@@ -1280,14 +1757,18 @@ async function start() {
     build.target = SIM_WINDOW;
     box.append(build);
     notice.append(box);
+    await runsLoaded;
     return;
   }
 
   byId('toolbar').hidden = false;
   bindToolbar();
+  paintAuthors();
+  paintTags();
   paintGrid();
   route();
   await hydrate();
+  await runsLoaded;
 }
 
 start();

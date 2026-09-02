@@ -30,8 +30,9 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, normaliseLapMs, normaliseName,
-  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, TIME_ID_RE, TRACK_ID_RE,
+  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectRun, inspectTags,
+  normaliseLapMs, normaliseName,
+  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, RUN_MAPS, TAGS, TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -161,12 +162,23 @@ function clientIp(req) {
 }
 
 /*
- * The bug flood gate, in two halves so a REJECTED report does not spend the
+ * The flood gate, in two halves so a REJECTED post does not spend the
  * allowance: the check runs before the body is read, the record only after
  * validation passes. In one piece, eight malformed attempts (an over-long
  * title, say) locked a tester out for ten minutes without a single ticket
  * landing. Spam of invalid posts stays free, and stays harmless: it stores
  * nothing.
+ *
+ * `who` is the client address with the route folded into it, so a tester
+ * filing bugs and a pilot posting scores do not spend each other's
+ * allowance. It was written for bugs and the freestyle board is the second
+ * caller: a public write with no owner and no edit key, which is the same
+ * shape of exposure and wants the same gate.
+ *
+ * It is process local, so on a host that runs two instances or spins one
+ * down it is a speed bump rather than a guarantee. What does the real work
+ * on the freestyle board is that a pilot holds ONE row per map: see
+ * addRunUnlocked in src/store.js.
  */
 function bugFlooded(ip) {
   const now = Date.now();
@@ -309,10 +321,36 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: inspected.error });
       return;
     }
+    /*
+     * TAGS TRAVEL IN THE ENVELOPE, BESIDE THE AUTHOR, NOT INSIDE THE
+     * DOCUMENT, and that is the whole reason this is a two line change
+     * rather than a deploy dance.
+     *
+     * A tag says what the author MEANT the track for. It is not part of the
+     * layout, it is not something the simulator reads to fly the track, and
+     * it is not something a visitor loading a shared document needs. Putting
+     * it in the document would mean a schemaVersion bump, which means
+     * DEPLOY.md's rule that the board ships before the simulator, which
+     * means a simulator deployed first publishes tracks this board refuses
+     * with a message about a version number rather than about anything the
+     * author did. It would also have to be kept out of layoutHash by hand,
+     * and layoutHash getting that wrong silently clears every republished
+     * track's times.
+     *
+     * In the envelope it is none of those things: an old builder sends no
+     * tags and gets an empty list, a new builder sends tags to an old board
+     * and they are ignored, and nobody's lap times move.
+     */
+    const tagged = inspectTags(body.tags);
+    if (tagged.error) {
+      send(res, 400, { error: tagged.error });
+      return;
+    }
     const result = await store.publish({
       inspected,
       author,
       editKey: typeof body.editKey === 'string' ? body.editKey : '',
+      tags: tagged.tags,
     });
     if (result.error) {
       send(res, result.status || 400, { error: result.error, conflict: Boolean(result.conflict) });
@@ -395,6 +433,63 @@ async function handleApi(req, res, url) {
       return;
     }
     send(res, 200, row);
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* The freestyle board                                                */
+  /* ---------------------------------------------------------------- */
+
+  if (req.method === 'GET' && path === '/api/runs') {
+    const map = url.searchParams.get('map') || '';
+    if (map && !RUN_MAPS.includes(map)) {
+      send(res, 400, { error: 'That is not a map this board keeps scores for.' });
+      return;
+    }
+    send(res, 200, { runs: await store.listRuns({ map }), tags: TAGS, maps: RUN_MAPS });
+    return;
+  }
+
+  /*
+   * The first public write on this board with no owner and no edit key, so
+   * it carries every guard the bug route carries and one the bug route does
+   * not need: a pilot holds one row per map, replaced only by a better run.
+   * That, rather than the flood gate, is what stops a table being filled.
+   */
+  if (req.method === 'POST' && path === '/api/runs') {
+    const ip = clientIp(req);
+    if (bugFlooded(`run:${ip}`)) {
+      send(res, 429, { error: 'Too many runs posted from here. Fly another and try again shortly.' });
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 20_000, 'That run is too large to post.'));
+    } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
+      send(res, 400, { error: e.message || 'That request was not JSON.' });
+      return;
+    }
+    const inspected = inspectRun(body);
+    if (inspected.error) {
+      send(res, 400, { error: inspected.error });
+      return;
+    }
+    recordBugHit(`run:${ip}`);
+    const result = await store.addRun(inspected.run);
+    if (result.error) {
+      send(res, result.status || 400, { error: result.error });
+      return;
+    }
+    /*
+     * 200 rather than 201 when the pilot already held a better run: nothing
+     * was created, and the body says so with `improved: false` so the
+     * simulator can tell a pilot they did not beat themselves rather than
+     * congratulating them on a score that is not on the board.
+     */
+    send(res, result.improved ? 201 : 200, result);
     return;
   }
 

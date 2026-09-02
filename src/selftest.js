@@ -566,13 +566,19 @@ async function testHttp() {
     const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
       simAnchors.length === 7 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
-    /* Six: the card's Fly, the sheet's Fly and Remix, the header and
-     * footer rewrite helper, the empty-board Build link, and the chase
-     * link builder the podium and the sheet's table both go through.
-     * Credits uses that same rewrite helper. */
+    /* Eight: the card's Fly, the sheet's Fly and Remix, the header and
+     * footer rewrite helper, the empty-board Build link, the chase link
+     * builder the podium and the sheet's table both go through, and the
+     * freestyle board's two Fly buttons, one on an empty board and one
+     * under a full one. Credits uses the same rewrite helper.
+     *
+     * The number is the point of the check rather than a detail of it: a
+     * new link that forgets the tab name opens a fresh simulator on every
+     * click, each one running a physics loop and holding a WebGL context,
+     * and the page looks perfectly correct while doing it. */
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
-      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 6);
+      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 8);
     check('nothing app.js builds opens a bare new tab or asks for noopener',
       !app.includes("'_blank'") && !app.includes("noopener'"));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
@@ -644,6 +650,200 @@ async function testHttp() {
     check('a non-ticket id is not a 500', proto.status === 400 || proto.status === 404);
     const stillBoard = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
     check('filing a bug does not drop tracks', stillBoard.tracks[0].id === 'trk-1a2b3c4d' && stillBoard.tracks[0].best.lapMs === 29110);
+
+    /* ---------------------------------------------------------------- */
+    /* Tags                                                              */
+    /* ---------------------------------------------------------------- */
+
+    const untagged = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('a track published without tags carries an empty list, never undefined',
+      Array.isArray(untagged.tracks[0].tags) && untagged.tracks[0].tags.length === 0);
+    const tagged = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: sampleDoc('trk-7a7a7a7a'),
+        tags: ['experiment', 'race', 'race'],
+      }),
+    });
+    const taggedBody = await tagged.json();
+    check('a track can be published with tags', tagged.status === 201);
+    const withTags = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    const tagRow = withTags.tracks.find((t) => t.id === 'trk-7a7a7a7a');
+    /* Deduplicated, and in the board's own order rather than the order they
+     * were sent, so two tracks wearing the same tags carry the same list. */
+    check('and they come back deduplicated in the board\'s order',
+      tagRow && tagRow.tags.join() === 'race,experiment');
+    const badTag = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook', document: sampleDoc('trk-8b8b8b8b'), tags: ['racing'],
+      }),
+    });
+    /* Refused, not dropped: a builder that offered a tag and a board that
+     * ignored it would disagree silently and the author would never learn. */
+    check('an unknown tag is refused rather than dropped', badTag.status === 400);
+    const manyTags = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: sampleDoc('trk-9c9c9c9c'),
+        tags: ['race', 'skills', 'experiment', 'freestyle', 'beginner', 'technical'],
+      }),
+    });
+    check('and a track cannot wear every tag on the board', manyTags.status === 400);
+    /*
+     * A tag is not part of the layout, so retagging must not clear a time.
+     * That is the whole reason tags travel in the envelope beside the
+     * author rather than inside the document, where they would have to be
+     * kept out of layoutHash by hand.
+     */
+    await fetch('http://127.0.0.1:3199/api/tracks/trk-7a7a7a7a/times', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bo Finch', lapMs: 41000 }),
+    });
+    const retagged = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: sampleDoc('trk-7a7a7a7a'),
+        editKey: taggedBody.editKey,
+        tags: ['skills'],
+      }),
+    });
+    const retaggedBody = await retagged.json();
+    const afterRetag = await fetch('http://127.0.0.1:3199/api/tracks/trk-7a7a7a7a').then((r) => r.json());
+    check('retagging a track keeps its times',
+      retagged.status === 200 && retaggedBody.timesCleared === false
+      && afterRetag.times.length === 1 && afterRetag.tags.join() === 'skills');
+    /* And clearing them is one empty list, not an omission: an omitted list
+     * is "this builder does not know about tags" and must leave them be. */
+    const cleared = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: sampleDoc('trk-7a7a7a7a'),
+        editKey: taggedBody.editKey,
+        tags: [],
+      }),
+    });
+    const afterClear = await fetch('http://127.0.0.1:3199/api/tracks/trk-7a7a7a7a').then((r) => r.json());
+    check('and a track can be untagged again',
+      cleared.status === 200 && afterClear.tags.length === 0);
+
+    /* ---------------------------------------------------------------- */
+    /* The freestyle board                                               */
+    /* ---------------------------------------------------------------- */
+
+    const aRun = (over) => ({
+      name: 'Ada Rook',
+      map: 'city',
+      style: 'expert',
+      score: 24800,
+      durationMs: 120000,
+      tricks: 31,
+      unique: 14,
+      bestCombo: 9100,
+      bestTrick: 1450,
+      crashes: 2,
+      signature: 'Trippy Spin x2',
+      ...over,
+    });
+    const emptyRuns = await fetch('http://127.0.0.1:3199/api/runs').then((r) => r.json());
+    check('the freestyle board starts empty and still answers',
+      Array.isArray(emptyRuns.runs) && emptyRuns.runs.length === 0
+      && Array.isArray(emptyRuns.tags) && emptyRuns.tags.length > 0);
+    const firstRun = await fetch('http://127.0.0.1:3199/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(aRun()),
+    });
+    const firstBody = await firstRun.json();
+    check('post a freestyle run',
+      firstRun.status === 201 && firstBody.rank === 1 && firstBody.improved === true);
+    const rival = await fetch('http://127.0.0.1:3199/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(aRun({ name: 'Bo Finch', score: 31200 })),
+    });
+    const rivalBody = await rival.json();
+    check('a better run takes the top of the board', rivalBody.rank === 1);
+    const ordered = await fetch('http://127.0.0.1:3199/api/runs').then((r) => r.json());
+    check('and the board is ordered highest first',
+      ordered.runs.length === 2 && ordered.runs[0].name === 'Bo Finch'
+      && ordered.runs[1].name === 'Ada Rook');
+    /*
+     * ONE ROW PER PILOT. A leaderboard is a list of who is good, not a log
+     * of who pressed the button, and this endpoint is the board's only
+     * public write with no owner: without this rule one pilot could own the
+     * whole visible table.
+     */
+    const worse = await fetch('http://127.0.0.1:3199/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      /* A whole, plausible run that simply is not as good. bestCombo and
+       * bestTrick come down with the score, because a chain cannot be worth
+       * more than the run it is in and inspectRun refuses one that is. */
+      body: JSON.stringify(aRun({ score: 100, bestCombo: 90, bestTrick: 50 })),
+    });
+    const worseBody = await worse.json();
+    const afterWorse = await fetch('http://127.0.0.1:3199/api/runs').then((r) => r.json());
+    check('a worse run by the same pilot does not take their place',
+      worse.status === 200 && worseBody.improved === false && worseBody.score === 24800
+      && afterWorse.runs.length === 2);
+    const better = await fetch('http://127.0.0.1:3199/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(aRun({ name: 'ADA ROOK', score: 40000 })),
+    });
+    const afterBetter = await fetch('http://127.0.0.1:3199/api/runs').then((r) => r.json());
+    check('a better one replaces it, and a capital letter is the same pilot',
+      better.status === 201 && afterBetter.runs.length === 2
+      && afterBetter.runs[0].name === 'ADA ROOK' && afterBetter.runs[0].score === 40000);
+    /*
+     * The board cannot recompute a score, so it bounds the claim and checks
+     * it against itself. These are the refusals that catches.
+     */
+    const refusals = [
+      ['a score no number of tricks could reach', aRun({ score: 1e12 })],
+      ['a run with no tricks in it', aRun({ tricks: 0 })],
+      ['more distinct tricks than tricks', aRun({ unique: 99, tricks: 4 })],
+      ['one trick worth more than the whole run', aRun({ bestTrick: 999999 })],
+      ['a chain worth more than the whole run', aRun({ bestCombo: 999999 })],
+      ['a map this board keeps no scores for', aRun({ map: 'bando' })],
+      ['a physics model that does not exist', aRun({ style: 'godmode' })],
+      ['a run that lasted no time at all', aRun({ durationMs: 0 })],
+      ['a pilot name that is not a name', aRun({ name: '!!' })],
+    ];
+    let refused = 0;
+    for (const [, payload] of refusals) {
+      const r = await fetch('http://127.0.0.1:3199/api/runs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (r.status === 400) {
+        refused += 1;
+      }
+    }
+    check('every implausible run is refused with a 400', refused === refusals.length);
+    const notObject = await fetch('http://127.0.0.1:3199/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '7',
+    });
+    check('and a JSON non-object is a 400, not a 500', notObject.status === 400);
+    const badMapQuery = await fetch('http://127.0.0.1:3199/api/runs?map=nowhere');
+    check('an unknown map in the query is a 400', badMapQuery.status === 400);
+    const stillTracks = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('and none of it disturbed the tracks',
+      stillTracks.tracks.some((t) => t.id === 'trk-1a2b3c4d'));
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });

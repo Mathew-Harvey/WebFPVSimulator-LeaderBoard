@@ -159,6 +159,48 @@ function summaryOf(track, times) {
     updatedUtc: track.updatedUtc,
     times: ranked.length,
     best: best ? { name: best.name, lapMs: best.lapMs } : null,
+    /* Every track published before tags existed has none, and an absent
+     * list must read as an empty one rather than as undefined: the page
+     * filters on it and a card prints it. */
+    tags: Array.isArray(track.tags) ? track.tags : [],
+  };
+}
+
+/*
+ * Highest score first, and the earliest post wins a tie, so a pilot who
+ * matches a score does not take the place off the pilot who got there
+ * first. Its SQL twins are the ORDER BY in PgStore.listRuns and the index
+ * runs_map_score in schema.sql, and like byLap's five copies they all have
+ * to agree or a run is ranked one way in the list and another in the
+ * confirmation the pilot is shown.
+ */
+function byScore(a, b) {
+  return b.score - a.score || String(a.postedUtc).localeCompare(String(b.postedUtc));
+}
+
+/* The handle a run is addressed by. Minted here for the same reason a time
+ * id is: the file store has no serial. */
+function newRunId() {
+  return `run-${randomBytes(4).toString('hex')}`;
+}
+
+/* A run row as the API shows it. Every field the arcade board prints, and
+ * nothing else. */
+function summaryRun(row) {
+  return {
+    id: row.id || null,
+    name: row.name,
+    map: row.map,
+    style: row.style,
+    score: row.score,
+    durationMs: row.durationMs,
+    tricks: row.tricks,
+    unique: row.unique,
+    bestCombo: row.bestCombo,
+    bestTrick: row.bestTrick,
+    crashes: row.crashes,
+    signature: row.signature || '',
+    postedUtc: row.postedUtc,
   };
 }
 
@@ -167,7 +209,9 @@ function summaryOf(track, times) {
 /* ------------------------------------------------------------------ */
 
 function emptyFile() {
-  return { tracks: {}, times: {}, bugs: {} };
+  return {
+    tracks: {}, times: {}, bugs: {}, runs: [],
+  };
 }
 
 class FileStore {
@@ -196,6 +240,13 @@ class FileStore {
       this.data = parsed;
       if (!this.data.bugs || typeof this.data.bugs !== 'object' || Array.isArray(this.data.bugs)) {
         this.data.bugs = {};
+      }
+      /* Repaired in place, NOT added to the guard above. A board.json
+       * written before freestyle runs existed is not corrupt, it is old,
+       * and treating it as corrupt would blank every developer's local
+       * board on the next start. Same rule bugs got. */
+      if (!Array.isArray(this.data.runs)) {
+        this.data.runs = [];
       }
     } catch (e) {
       if (e.code === 'ENOENT') {
@@ -241,11 +292,11 @@ class FileStore {
     };
   }
 
-  async publish({ inspected, author, editKey }) {
-    return this.lock(() => this.publishUnlocked({ inspected, author, editKey }));
+  async publish({ inspected, author, editKey, tags }) {
+    return this.lock(() => this.publishUnlocked({ inspected, author, editKey, tags }));
   }
 
-  async publishUnlocked({ inspected, author, editKey }) {
+  async publishUnlocked({ inspected, author, editKey, tags = [] }) {
     const existing = this.data.tracks[inspected.id];
     let key = editKey;
     let timesCleared = false;
@@ -279,6 +330,7 @@ class FileStore {
       hasLogo: inspected.hasLogo,
       gates: inspected.gates,
       elements: inspected.elements,
+      tags,
       publishedUtc,
       updatedUtc: nowIso(),
     };
@@ -335,6 +387,64 @@ class FileStore {
       return null;
     }
     return { id: row.id, name: row.name, lapMs: row.lapMs, ghost: row.ghost || null };
+  }
+
+  async listRuns({ map } = {}) {
+    const rows = (this.data.runs || []).filter((r) => !map || r.map === map);
+    return rows.sort(byScore).map(summaryRun);
+  }
+
+  async addRun(run) {
+    return this.lock(() => this.addRunUnlocked(run));
+  }
+
+  /*
+   * ONE ROW PER PILOT PER MAP, replaced only by a better run.
+   *
+   * A leaderboard is a list of who is good, not a log of who pressed the
+   * button. Keeping every run would let one pilot own the whole visible
+   * table by flying twenty mediocre ones, which is not a thing anybody does
+   * on purpose and is exactly what somebody does on purpose. It also means
+   * this endpoint, which is the board's first public write with no owner
+   * and no edit key, cannot be used to fill the database.
+   *
+   * The pilot is matched case insensitively, so a name capitalised
+   * differently on Tuesday does not become a second pilot. Its SQL twin is
+   * the unique index runs_pilot_map.
+   */
+  async addRunUnlocked(run) {
+    if (!Array.isArray(this.data.runs)) {
+      this.data.runs = [];
+    }
+    const key = run.name.toLowerCase();
+    const held = this.data.runs.find((r) => r.map === run.map && r.name.toLowerCase() === key);
+    if (held && held.score >= run.score) {
+      const ranked = [...this.data.runs].filter((r) => r.map === run.map).sort(byScore);
+      return {
+        ...summaryRun(held),
+        rank: ranked.indexOf(held) + 1,
+        runs: ranked.length,
+        improved: false,
+      };
+    }
+    let id = newRunId();
+    while (this.data.runs.some((r) => r.id === id)) {
+      id = newRunId();
+    }
+    const row = { ...run, id, postedUtc: nowIso() };
+    if (held) {
+      this.data.runs[this.data.runs.indexOf(held)] = row;
+    } else {
+      this.data.runs.push(row);
+    }
+    await this.flush();
+    const ranked = [...this.data.runs].filter((r) => r.map === run.map).sort(byScore);
+    return {
+      ...summaryRun(row),
+      rank: ranked.indexOf(row) + 1,
+      runs: ranked.length,
+      improved: true,
+    };
   }
 
   async listBugs({ status, kind, limit } = {}) {
@@ -466,7 +576,7 @@ class PgStore {
     return found.rows[0];
   }
 
-  async publish({ inspected, author, editKey }) {
+  async publish({ inspected, author, editKey, tags = [] }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -491,11 +601,12 @@ class PgStore {
         await client.query(
           `UPDATE tracks SET
             name = $2, author = $3, document = $4, plan = $5, layout_hash = $6,
-            has_logo = $7, gates = $8, elements = $9, updated_utc = NOW()
+            has_logo = $7, gates = $8, elements = $9, tags = $10, updated_utc = NOW()
            WHERE id = $1`,
           [
             inspected.id, inspected.name, author, inspected.document, inspected.plan,
             inspected.layoutHash, inspected.hasLogo, inspected.gates, inspected.elements,
+            tags,
           ],
         );
       } else {
@@ -503,12 +614,12 @@ class PgStore {
         await client.query(
           `INSERT INTO tracks (
             id, name, author, document, plan, layout_hash, edit_key_hash,
-            has_logo, gates, elements, published_utc, updated_utc
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())`,
+            has_logo, gates, elements, tags, published_utc, updated_utc
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW())`,
           [
             inspected.id, inspected.name, author, inspected.document, inspected.plan,
             inspected.layoutHash, hashEditKey(key), inspected.hasLogo, inspected.gates,
-            inspected.elements,
+            inspected.elements, tags,
           ],
         );
       }
@@ -617,6 +728,94 @@ class PgStore {
       [trackId, timeId],
     );
     return found.rowCount ? found.rows[0] : null;
+  }
+
+  async listRuns({ map } = {}) {
+    const found = await this.pool.query(
+      `SELECT * FROM runs
+       WHERE ($1::text IS NULL OR map = $1)
+       ORDER BY score DESC, posted_utc ASC`,
+      [map || null],
+    );
+    return found.rows.map(runRowToSummary);
+  }
+
+  /*
+   * One row per pilot per map, replaced only by a better run. The reasoning
+   * is on FileStore.addRunUnlocked; this is the same rule written in SQL.
+   *
+   * The upsert is on the unique index runs_pilot_map, and the WHERE on the
+   * DO UPDATE is what makes it replace-if-better rather than
+   * replace-always: a worse run touches nothing and the RETURNING comes
+   * back empty, which the read below turns into the pilot's standing row.
+   *
+   * The public id is random and can collide, so the whole thing retries the
+   * way addTime does. Six attempts against a four byte id is not a real
+   * risk, it is the same belt this file already wears.
+   */
+  async addRun(run) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        return await this.addRunOnce(run);
+      } catch (e) {
+        if (e.code !== '23505' || String(e.constraint || '') !== 'runs_public_id') {
+          throw e;
+        }
+      }
+    }
+    throw new Error('Could not allocate a run id.');
+  }
+
+  async addRunOnce(run) {
+    const id = newRunId();
+    const written = await this.pool.query(
+      `INSERT INTO runs (
+        public_id, name, map, style, score, duration_ms, tricks, unique_tricks,
+        best_combo, best_trick, crashes, signature, posted_utc
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+      ON CONFLICT (map, lower(name)) DO UPDATE SET
+        public_id = EXCLUDED.public_id,
+        name = EXCLUDED.name,
+        style = EXCLUDED.style,
+        score = EXCLUDED.score,
+        duration_ms = EXCLUDED.duration_ms,
+        tricks = EXCLUDED.tricks,
+        unique_tricks = EXCLUDED.unique_tricks,
+        best_combo = EXCLUDED.best_combo,
+        best_trick = EXCLUDED.best_trick,
+        crashes = EXCLUDED.crashes,
+        signature = EXCLUDED.signature,
+        posted_utc = EXCLUDED.posted_utc
+      WHERE runs.score < EXCLUDED.score
+      RETURNING *`,
+      [
+        id, run.name, run.map, run.style, run.score, run.durationMs, run.tricks,
+        run.unique, run.bestCombo, run.bestTrick, run.crashes, run.signature,
+      ],
+    );
+    const improved = written.rowCount > 0;
+    const held = improved ? written.rows[0] : (await this.pool.query(
+      'SELECT * FROM runs WHERE map = $1 AND lower(name) = lower($2)',
+      [run.map, run.name],
+    )).rows[0];
+    /* The rank is asked for separately rather than computed in the insert,
+     * because the ordering rule lives in one ORDER BY and this must not
+     * become a sixth copy of it that could drift. */
+    const ranked = await this.pool.query(
+      `SELECT COUNT(*)::int AS ahead FROM runs
+       WHERE map = $1
+         AND (score > $2 OR (score = $2 AND posted_utc < $3))`,
+      [run.map, held.score, held.posted_utc],
+    );
+    const total = await this.pool.query(
+      'SELECT COUNT(*)::int AS n FROM runs WHERE map = $1', [run.map],
+    );
+    return {
+      ...runRowToSummary(held),
+      rank: ranked.rows[0].ahead + 1,
+      runs: total.rows[0].n,
+      improved,
+    };
   }
 
   async listBugs({ status, kind, limit } = {}) {
@@ -728,6 +927,31 @@ function rowToSummary(row) {
     plan: planFromDocument(row.document),
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,
+    /* A column added later, so a row read back from a database that has not
+     * run the migration yet answers null rather than an array. Both spellings
+     * of "no tags" have to become the same empty list, or the page filters
+     * on undefined and a card throws. */
+    tags: Array.isArray(row.tags) ? row.tags : [],
+  };
+}
+
+/* The Postgres twin of summaryRun. Same rule as rowToSummary and summaryOf:
+ * one contract, two writers. */
+function runRowToSummary(row) {
+  return {
+    id: row.public_id || null,
+    name: row.name,
+    map: row.map,
+    style: row.style,
+    score: row.score,
+    durationMs: row.duration_ms,
+    tricks: row.tricks,
+    unique: row.unique_tricks,
+    bestCombo: row.best_combo,
+    bestTrick: row.best_trick,
+    crashes: row.crashes,
+    signature: row.signature || '',
+    postedUtc: row.posted_utc,
   };
 }
 
