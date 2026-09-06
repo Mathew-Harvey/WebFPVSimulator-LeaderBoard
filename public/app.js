@@ -227,9 +227,28 @@ function reduceMotion() {
 const SIM_WINDOW = 'webfpv-sim';
 const BOARD_WINDOW = 'webfpv-board';
 
+/*
+ * WHICH AIRCRAFT A LINK IS FOR, from the track it names.
+ *
+ * The simulator keeps one seat per class and files a linked track by the
+ * track's own class, so a link that named a room but not the aircraft, opened
+ * on a profile flying the five inch, filed the room in the whoop seat and
+ * then read the five inch's: the pilot arrived on their old field with the
+ * track they were sent to nowhere. The simulator seats the aircraft from the
+ * document now as well, but the link saying so is what lets it draw the
+ * right world from the first frame instead of swapping under the title.
+ */
+function craftParamOf(id) {
+  const track = state.courses.find((t) => t.id === id);
+  if (!track) {
+    return '';
+  }
+  return `&craft=${classOf(track) === 'micro' ? 'whoop65' : '5inch'}`;
+}
+
 function flyHref(config, id, ghostId) {
   const board = encodeURIComponent(config.boardOrigin);
-  const base = `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}`;
+  const base = `${config.simOrigin}/?map=custom&share=${encodeURIComponent(id)}&board=${board}${craftParamOf(id)}`;
   /* A ghost id turns the link into a chase: the simulator fetches that
    * lap's recording and flies it beside the visitor as a translucent
    * pacer. Only times posted with a recording carry one. */
@@ -248,7 +267,11 @@ function chaseLink(config, trackId, row) {
 
 function remixHref(config, id) {
   const board = encodeURIComponent(config.boardOrigin);
-  return `${config.simOrigin}/src/trackbuilder/index.html?share=${encodeURIComponent(id)}&board=${board}`;
+  const track = state.courses.find((t) => t.id === id);
+  /* The builder reads ?class= for which canvas to open on. Same reason as
+   * craftParamOf: a room remixed on a five inch builder is a room. */
+  const cls = track ? `&class=${classOf(track)}` : '';
+  return `${config.simOrigin}/src/trackbuilder/index.html?share=${encodeURIComponent(id)}&board=${board}${cls}`;
 }
 
 function orbitHref(config, id) {
