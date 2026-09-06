@@ -519,6 +519,30 @@
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
+      /*
+         THE WHOOP CHIP, and only the whoop gets one.
+
+         Every track on this board is a sixty metre field until somebody
+         publishes a room, so a chip on all of them would be a word repeated
+         on every card and read as decoration. Marking the exception is what
+         a chip is for. Sakura, because it is this page's chrome and the
+         aircraft is a property of the track rather than a record: mint is
+         reserved for a time.
+      */
+      .tile-craft {
+        position: absolute;
+        right: 9px;
+        top: 9px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        background: rgba(11, 16, 12, 0.82);
+        box-shadow: inset 0 0 0 1px rgba(232, 168, 184, 0.55);
+        color: var(--sakura);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
       .tile-flown {
         position: absolute;
         left: 9px;
@@ -1914,6 +1938,30 @@
               <div class="sort">
                 <label for="by">Built by</label>
                 <select id="by"><option value="">Anyone</option></select>
+              </div>
+              <!--
+                THE AIRCRAFT, WHICH IS ALSO THE CLASS OF THE TRACK.
+
+                A track on this board is one of two things and it is not a
+                preference: a RaceGOW room is 28 inch gates inside about 1.4
+                by 2.1 m and is flown on a 65 mm whoop, a MultiGP field is
+                5 ft gates over sixty metres and is flown on a five inch, and
+                the simulator seats the aircraft from the track rather than
+                asking. So one control answers both questions, and it is
+                labelled with the half a pilot thinks in.
+
+                A select rather than a third row of chips: the tag bar below
+                is a closed vocabulary a reader browses, and this is a choice
+                of one out of three sitting beside the other two choices of
+                one, which is what the two selects either side of it are.
+              -->
+              <div class="sort">
+                <label for="craft">Flown on</label>
+                <select id="craft">
+                  <option value="">Anything</option>
+                  <option value="full">Five inch</option>
+                  <option value="micro">65 mm whoop</option>
+                </select>
               </div>
               <div class="sort">
                 <label for="sort">Order</label>

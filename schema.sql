@@ -54,6 +54,21 @@ CREATE TABLE IF NOT EXISTS times (
 ALTER TABLE times ADD COLUMN IF NOT EXISTS public_id TEXT;
 ALTER TABLE times ADD COLUMN IF NOT EXISTS ghost TEXT;
 
+-- The fastest three CONSECUTIVE laps of the run that set this time, in
+-- milliseconds, and null on every row posted before it existed.
+--
+-- RaceGOW is scored on three consecutive laps where MultiGP's time trial is
+-- scored on one, so a time flown in a room carries both numbers and a time
+-- flown on the field carries the lap alone. Null is not "nought": it is a
+-- run that never put three clean laps together, and the board prints nothing
+-- rather than a zero.
+--
+-- There is deliberately NO column for the track class. A track's class is
+-- read off its stored document by trackClassOf in src/validate.js, on every
+-- list, exactly as the plan is: one copy of the truth and no migration to
+-- get wrong.
+ALTER TABLE times ADD COLUMN IF NOT EXISTS three_ms INTEGER;
+
 CREATE INDEX IF NOT EXISTS times_track_lap
   ON times (track_id, lap_ms, posted_utc);
 

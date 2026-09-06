@@ -26,7 +26,7 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { hashEditKey, planFromDocument } from './validate.js';
+import { hashEditKey, planFromDocument, trackClassOf } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -57,6 +57,10 @@ function summaryTime(row) {
     id: row.id || null,
     name: row.name,
     lapMs: row.lapMs,
+    /* The fastest three consecutive laps of that run, or null. Null on
+     * every row posted before it existed and on every run that never put
+     * three clean laps together, and the page prints nothing for both. */
+    threeMs: row.threeMs == null ? null : row.threeMs,
     postedUtc: row.postedUtc,
     hasGhost: Boolean(row.ghost),
   };
@@ -154,6 +158,10 @@ function summaryOf(track, times) {
     gates: track.gates,
     elements: track.elements,
     hasLogo: track.hasLogo,
+    /* Derived from the stored document on every read, exactly as the plan
+     * is, so there is one copy of the truth and no migration. Every track
+     * published before the class existed reads as the field it was. */
+    trackClass: trackClassOf(track.document),
     plan: livePlan(track),
     publishedUtc: track.publishedUtc,
     updatedUtc: track.updatedUtc,
@@ -348,8 +356,8 @@ class FileStore {
     };
   }
 
-  async addTime({ trackId, name, lapMs, ghost }) {
-    return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs, ghost }));
+  async addTime({ trackId, name, lapMs, threeMs, ghost }) {
+    return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs, threeMs, ghost }));
   }
 
   hasTimeId(id) {
@@ -361,7 +369,7 @@ class FileStore {
     return false;
   }
 
-  async addTimeUnlocked({ trackId, name, lapMs, ghost }) {
+  async addTimeUnlocked({ trackId, name, lapMs, threeMs, ghost }) {
     const track = this.data.tracks[trackId];
     if (!track) {
       return { error: 'That track is not on the board.', status: 404 };
@@ -370,14 +378,18 @@ class FileStore {
     while (this.hasTimeId(id)) {
       id = newTimeId();
     }
-    const row = { id, name, lapMs, ghost: ghost || null, postedUtc: nowIso() };
+    const row = {
+      id, name, lapMs, threeMs: threeMs == null ? null : threeMs, ghost: ghost || null, postedUtc: nowIso(),
+    };
     const list = this.data.times[trackId] || [];
     list.push(row);
     this.data.times[trackId] = list;
     await this.flush();
     const ranked = [...list].sort(byLap);
     const rank = ranked.findIndex((t) => t === row) + 1;
-    return { id, name, lapMs, postedUtc: row.postedUtc, rank, times: ranked.length };
+    return {
+      id, name, lapMs, threeMs: row.threeMs, postedUtc: row.postedUtc, rank, times: ranked.length,
+    };
   }
 
   async getGhost(trackId, timeId) {
@@ -549,7 +561,7 @@ class PgStore {
       return null;
     }
     const times = await this.pool.query(
-      `SELECT public_id AS id, name, lap_ms AS "lapMs", posted_utc AS "postedUtc",
+      `SELECT public_id AS id, name, lap_ms AS "lapMs", three_ms AS "threeMs", posted_utc AS "postedUtc",
               (ghost IS NOT NULL) AS "hasGhost"
        FROM times WHERE track_id = $1 ORDER BY lap_ms ASC, posted_utc ASC`,
       [id],
@@ -647,13 +659,13 @@ class PgStore {
     }
   }
 
-  async addTime({ trackId, name, lapMs, ghost }) {
+  async addTime({ trackId, name, lapMs, threeMs, ghost }) {
     /* The public id is random, so an insert can collide with an existing
      * row's unique index. The whole transaction retries on a fresh id, the
      * same shape as addBug's loop; six failures in a row is not luck, it is
      * a broken random source, and deserves the throw. */
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const result = await this.addTimeOnce({ trackId, name, lapMs, ghost });
+      const result = await this.addTimeOnce({ trackId, name, lapMs, threeMs, ghost });
       if (result !== null) {
         return result;
       }
@@ -661,7 +673,7 @@ class PgStore {
     throw new Error('Could not allocate a time id.');
   }
 
-  async addTimeOnce({ trackId, name, lapMs, ghost }) {
+  async addTimeOnce({ trackId, name, lapMs, threeMs, ghost }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -671,10 +683,11 @@ class PgStore {
         return { error: 'That track is not on the board.', status: 404 };
       }
       const inserted = await client.query(
-        `INSERT INTO times (track_id, public_id, name, lap_ms, ghost, posted_utc)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING id, public_id AS "publicId", name, lap_ms AS "lapMs", posted_utc AS "postedUtc"`,
-        [trackId, newTimeId(), name, lapMs, ghost || null],
+        `INSERT INTO times (track_id, public_id, name, lap_ms, three_ms, ghost, posted_utc)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         RETURNING id, public_id AS "publicId", name, lap_ms AS "lapMs",
+                   three_ms AS "threeMs", posted_utc AS "postedUtc"`,
+        [trackId, newTimeId(), name, lapMs, threeMs == null ? null : threeMs, ghost || null],
       );
       /*
        * Ranked against the stored row, by its id, and entirely inside
@@ -700,6 +713,7 @@ class PgStore {
         id: inserted.rows[0].publicId,
         name,
         lapMs,
+        threeMs: inserted.rows[0].threeMs == null ? null : inserted.rows[0].threeMs,
         postedUtc: inserted.rows[0].postedUtc,
         rank: rankRow.rows[0].n,
         times: count.rows[0].n,
@@ -924,6 +938,7 @@ function rowToSummary(row) {
     gates: row.gates,
     elements: row.elements,
     hasLogo: row.has_logo,
+    trackClass: trackClassOf(row.document),
     plan: planFromDocument(row.document),
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,

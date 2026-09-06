@@ -312,6 +312,16 @@ const state = {
    * more results than one box alone which reads as the filter not working. */
   tags: new Set(),
   author: '',
+  /*
+   * WHICH AIRCRAFT, and on this board that is the same question as which
+   * class of track. A track's class is what it IS: a RaceGOW room is 28 inch
+   * gates inside about 1.4 by 2.1 m and is flown on a 65 mm whoop, a MultiGP
+   * field is 5 ft gates over sixty metres and is flown on a five inch, and
+   * the simulator seats the aircraft from the track rather than the other way
+   * round. So one filter answers both and the label says the part a pilot
+   * cares about. Empty is everything.
+   */
+  craft: '',
   /* The freestyle board. `runs` is null until the fetch answers, which the
    * painter tells apart from an empty board: nothing yet posted and not
    * loaded yet are different sentences. */
@@ -402,6 +412,24 @@ function tagsOf(track) {
   return Array.isArray(track.tags) ? track.tags : [];
 }
 
+/*
+ * The class of a track, and 'full' for every one published before there were
+ * two, which is what they are. The server derives it from the stored document
+ * on every list, so this never has to guess.
+ */
+function classOf(track) {
+  return track && track.trackClass === 'micro' ? 'micro' : 'full';
+}
+
+/* What a pilot calls it. The board says the aircraft, not the class, because
+ * "micro" is a word about the document and "65 mm whoop" is a word about the
+ * thing you fly. */
+const CRAFT_LABEL = { full: 'Five inch', micro: '65 mm whoop' };
+
+function craftLabel(track) {
+  return CRAFT_LABEL[classOf(track)];
+}
+
 /* Every tag actually in use, with how many tracks wear it. Counted over the
  * tracks the OTHER filters leave standing, so ticking an author greys out
  * the tags that author never used rather than offering an empty result. */
@@ -431,7 +459,8 @@ function authors() {
 function poolBeforeTags() {
   const needle = state.query.trim().toLowerCase();
   return state.courses.filter((t) => matches(t, needle)
-    && (!state.author || String(t.author) === state.author));
+    && (!state.author || String(t.author) === state.author)
+    && (!state.craft || classOf(t) === state.craft));
 }
 
 function visibleCourses() {
@@ -457,6 +486,12 @@ function cardFor(track, config) {
   const size = fieldSize(track);
   if (size) {
     tile.append(el('span', 'tile-chip', size));
+  }
+  /* Only the whoop is marked. Every track here is a five inch track until
+   * somebody publishes a room, so a chip on all of them is a word repeated
+   * on every card; marking the exception is what a chip is for. */
+  if (classOf(track) === 'micro') {
+    tile.append(el('span', 'tile-craft', craftLabel(track)));
   }
   if (track.times > 0) {
     tile.append(el('span', 'tile-flown', plural(track.times, 'time', 'times')));
@@ -631,6 +666,9 @@ function paintGrid() {
     if (state.tags.size) {
       parts.push(`${[...state.tags].map(tagLabel).join(' and ')}`);
     }
+    if (state.craft) {
+      parts.push(`tracks flown on a ${CRAFT_LABEL[state.craft].toLowerCase()}`);
+    }
     const box = el('div', 'empty panel');
     box.append(el('h2', null, 'Nothing matches that'));
     box.append(el('p', null, parts.length
@@ -641,14 +679,19 @@ function paintGrid() {
     clear.addEventListener('click', () => {
       const find = byId('find');
       const by = byId('by');
+      const craft = byId('craft');
       state.query = '';
       state.author = '';
+      state.craft = '';
       state.tags.clear();
       if (find) {
         find.value = '';
       }
       if (by) {
         by.value = '';
+      }
+      if (craft) {
+        craft.value = '';
       }
       paintTags();
       paintGrid();
@@ -1194,10 +1237,27 @@ function paintBoard(host, track, times) {
 
   const leader = times[0].lapMs;
   const slowest = times[times.length - 1].lapMs || leader;
+  /*
+   * THE THREE LAP COLUMN, and it only appears where it means something.
+   *
+   * RaceGOW is scored on three CONSECUTIVE laps where MultiGP's time trial
+   * is scored on one, so a room's sheet carries both numbers. A field's does
+   * not: no time on this board has ever been posted with one, and a column
+   * of dashes is worse than no column. Even on a room it waits until at
+   * least one pilot has actually put three clean laps together, because a
+   * run that crashed on lap two has nothing to print there.
+   */
+  const wantsThree = classOf(track) === 'micro'
+    && times.some((t) => Number.isFinite(t.threeMs));
+  const columns = [['rank', ''], ['nm', 'Pilot'], ['time', 'Lap']];
+  if (wantsThree) {
+    columns.push(['time three', 'Three laps']);
+  }
+  columns.push(['gap', 'Gap'], ['when', 'Posted'], ['chase', '']);
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
-  for (const [cls, label] of [['rank', ''], ['nm', 'Pilot'], ['time', 'Time'], ['gap', 'Gap'], ['when', 'Posted'], ['chase', '']]) {
+  for (const [cls, label] of columns) {
     headRow.append(el('th', cls, label));
   }
   thead.append(headRow);
@@ -1220,6 +1280,20 @@ function paintBoard(host, track, times) {
     const time = el('td', 'time');
     time.append(timeNode(row.lapMs, 'tm'));
     tr.append(time);
+
+    if (wantsThree) {
+      const three = el('td', 'time three');
+      if (Number.isFinite(row.threeMs)) {
+        three.append(timeNode(row.threeMs, 'tm'));
+      } else {
+        /* A run that never put three clean laps together leaves the cell
+         * EMPTY, the way the gap column already leaves the leader's. A zero
+         * would be a time, and a dash would be a mark this page does not
+         * otherwise make. */
+        three.title = 'This run did not put three clean laps together.';
+      }
+      tr.append(three);
+    }
 
     const gap = el('td', 'gap');
     if (i > 0) {
@@ -1298,7 +1372,8 @@ async function paintSheet(track) {
   }
   factRow(facts, 'Gates', plural(track.gates, 'gate', 'gates'));
   factRow(facts, 'Elements', track.elements);
-  factRow(facts, 'Field', fieldSize(track));
+  factRow(facts, classOf(track) === 'micro' ? 'Room' : 'Field', fieldSize(track));
+  factRow(facts, 'Flown on', craftLabel(track));
   factRow(facts, 'Updated', formatAgo(track.updatedUtc));
   if (track.hasLogo) {
     factRow(facts, 'Branding', 'Sponsor print');
@@ -1487,6 +1562,17 @@ function bindToolbar() {
   const find = byId('find');
   const sort = byId('sort');
   const by = byId('by');
+  const craft = byId('craft');
+  if (craft) {
+    craft.value = state.craft;
+    craft.addEventListener('change', () => {
+      state.craft = craft.value === 'micro' || craft.value === 'full' ? craft.value : '';
+      /* Same reason the search repaints them: a tag nobody used on a whoop
+       * track should grey out the moment the board is showing only those. */
+      paintTags();
+      paintGrid();
+    });
+  }
   if (find) {
     find.addEventListener('input', () => {
       state.query = find.value;

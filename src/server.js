@@ -31,7 +31,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectRun, inspectTags,
-  normaliseLapMs, normaliseName,
+  normaliseLapMs, normaliseName, normaliseThreeMs,
   BUG_ID_RE, BUG_KINDS, BUG_STATUSES, RUN_MAPS, TAGS, TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
 
@@ -405,6 +405,15 @@ async function handleApi(req, res, url) {
       trackId,
       name,
       lapMs,
+      /*
+       * The RaceGOW metric, and it is OPTIONAL rather than validated into an
+       * error. A time posted from the sixty metre field has no such number
+       * and never will; a time posted from a room has one only when the run
+       * put three clean laps together. Absent, null and unusable all mean
+       * the same thing to the board, which is that there is nothing to
+       * print, and refusing the whole post over it would lose a good lap.
+       */
+      threeMs: normaliseThreeMs(body.threeMs, lapMs),
       ghost: ghost.ghost,
     });
     if (result.error) {

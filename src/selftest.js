@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
+  normaliseThreeMs, planFromDocument, trackClassOf,
 } from './validate.js';
 import { openStore } from './store.js';
 import { guessSimOrigin, isLoopback } from '../public/origins.js';
@@ -168,9 +169,100 @@ async function testValidate() {
   v2.schemaVersion = 2;
   const five = inspectDocument(v2);
   check('accepts a schema 2 track with five logos', !five.error && five.logoCount === 5);
+  /*
+   * SCHEMA 3 IS THE TRACK CLASS, and this used to assert the refusal. It was
+   * right while there was one class: an unknown version is a document from a
+   * builder this board has not been taught, and letting one in unread is how
+   * a board ends up storing a shape it cannot draw.
+   *
+   * Version 3 has now been read. It adds `trackClass` and nothing else:
+   * field, elements and sequence are identical, so a version 1 or 2 track
+   * keeps its times across a republish and every stored track reads as the
+   * sixty metre field it was built on.
+   */
   const v3 = sampleDoc('trk-1a2b3c4d');
   v3.schemaVersion = 3;
-  check('refuses a schema 3 track', Boolean(inspectDocument(v3).error));
+  const three = inspectDocument(v3);
+  check('accepts a schema 3 track', !three.error, three.error);
+  check('and a schema 3 track with no class is the field', three.trackClass === 'full', three.trackClass);
+  const v4 = sampleDoc('trk-1a2b3c4d');
+  v4.schemaVersion = 4;
+  check('but still refuses a version it has not been taught', Boolean(inspectDocument(v4).error));
+
+  /*
+   * A ROOM. RaceGOW's own dimensions: a 5 by 6 m field, a 28 inch gate out
+   * of 26.7 mm PVC, and a single 100 mm start stand, because there are no
+   * heats and every pilot flies alone at home.
+   *
+   * The three things checked here are the three the drawer cannot guess and
+   * used to assume: the class, the gate's own opening and the start row.
+   * Held at the MultiGP figures, that plan drew a gate a third of the width
+   * of the room and a start line two thirds of the way across it.
+   */
+  const room = sampleDoc('trk-2b3c4d5e', {
+    elements: [
+      {
+        id: 'el-1',
+        type: 'startPads',
+        position: { x: 0, y: 1.5, z: 0 },
+        yaw: 0,
+        dims: { pads: 1, spacing: 0.3, padSize: 0.1 },
+      },
+      {
+        id: 'el-2',
+        type: 'gate',
+        position: { x: 0, y: 0.6, z: 0 },
+        yaw: 0,
+        dims: { clearW: 0.7112, clearH: 0.7112, sillH: 0, levels: 1 },
+      },
+    ],
+    sequence: [{ id: 'seq-1', elementId: 'el-2', apertureIndex: 0, entry: 1 }],
+  });
+  room.schemaVersion = 3;
+  room.trackClass = 'micro';
+  room.field = { width: 5, depth: 6, gridSize: 0.0254 };
+  const roomOut = inspectDocument(room);
+  check('accepts a RaceGOW room', !roomOut.error, roomOut.error);
+  check('and reads its class', roomOut.trackClass === 'micro', roomOut.trackClass);
+  check('trackClassOf defaults anything else to the field',
+    trackClassOf({}) === 'full' && trackClassOf(null) === 'full'
+    && trackClassOf({ trackClass: 'nonsense' }) === 'full');
+  const roomPlan = planFromDocument(room);
+  check('the plan carries the class', roomPlan.trackClass === 'micro', roomPlan.trackClass);
+  check('the plan carries the room, not a field',
+    roomPlan.width === 5 && roomPlan.depth === 6, `${roomPlan.width} by ${roomPlan.depth}`);
+  const planGate = roomPlan.marks.find((m) => m.type === 'gate');
+  check('the plan carries the gate\u2019s own opening',
+    planGate && Math.abs(planGate.clearW - 0.7112) < 1e-9, planGate && planGate.clearW);
+  const planStart = roomPlan.marks.find((m) => m.type === 'startPads');
+  check('the plan carries the start row',
+    planStart && planStart.pads === 1 && planStart.spacing === 0.3 && planStart.padSize === 0.1,
+    JSON.stringify(planStart));
+  /* And the field is untouched: every track already on this board is one. */
+  const fieldPlan = planFromDocument(sampleDoc());
+  check('a field plan is still a field plan',
+    fieldPlan.trackClass === 'full' && fieldPlan.width === 60 && fieldPlan.depth === 40);
+  const fieldGate = fieldPlan.marks.find((m) => m.type === 'gate');
+  check('and it carries its own 5 ft opening',
+    fieldGate && Math.abs(fieldGate.clearW - 1.524) < 1e-9, fieldGate && fieldGate.clearW);
+
+  /*
+   * THE THREE LAP TOTAL is optional, and every way of not having one has to
+   * come out as null rather than as an error: a time from the field never
+   * has one, and a run in a room only has one when it put three clean laps
+   * together. The lower bound is the run's own arithmetic. Three laps cannot
+   * be faster than three of the run's best lap, and the posted lap IS the
+   * best lap, so anything under three times it is a claim the run's own
+   * numbers contradict.
+   */
+  check('a three lap total is kept', normaliseThreeMs(21590, 6990) === 21590);
+  check('no three lap total is null', normaliseThreeMs(undefined, 6990) === null);
+  check('an explicit null is null', normaliseThreeMs(null, 6990) === null);
+  check('a string is null, not a NaN', normaliseThreeMs('21590', 6990) === null);
+  check('a total faster than three of its own lap is null',
+    normaliseThreeMs(20000, 6990) === null);
+  check('exactly three of its own lap is kept', normaliseThreeMs(6990 * 3, 6990) === 20970);
+  check('a negative total is null', normaliseThreeMs(-1, 6990) === null);
   const six = sampleDoc('trk-1a2b3c4d', { logos: logos(6) });
   six.schemaVersion = 2;
   check('refuses a sixth logo', Boolean(inspectDocument(six).error));
@@ -369,6 +461,22 @@ async function testStore() {
   const fetchedGhost = await store.getGhost(inspected.id, ghosted.id);
   check('the ghost comes back whole', Boolean(fetchedGhost) && fetchedGhost.ghost === ghostBlob && fetchedGhost.lapMs === 47000);
   check('an unknown time id has no ghost row', (await store.getGhost(inspected.id, 'tm-00000000')) === null);
+  /*
+   * THE THREE LAP TOTAL, through the store. It is optional at every step, so
+   * the two cases that matter are that one posted comes back and one not
+   * posted comes back as null rather than as undefined: the page prints it
+   * or does not, and undefined would print the word.
+   */
+  const withThree = await store.addTime({
+    trackId: inspected.id, name: 'Fi', lapMs: 48000, threeMs: 146000,
+  });
+  check('a posted three lap total comes back', withThree.threeMs === 146000, withThree.threeMs);
+  const threeListed = (await store.getTrack(inspected.id)).times.find((t) => t.name === 'Fi');
+  check('and it is in the list', threeListed && threeListed.threeMs === 146000,
+    threeListed && threeListed.threeMs);
+  const adaListed = (await store.getTrack(inspected.id)).times.find((t) => t.name === 'Ada Rook');
+  check('a time posted without one lists null, not undefined',
+    adaListed && adaListed.threeMs === null, adaListed && String(adaListed.threeMs));
   /* A row written before ghosts existed: no id, no ghost key at all. It
    * has to list cleanly, not crash the mapper. */
   store.data.times[inspected.id].push({ name: 'Old Row', lapMs: 60000, postedUtc: '2026-01-01T00:00:00.000Z' });

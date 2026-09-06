@@ -56,6 +56,37 @@ export function normaliseLapMs(raw) {
   return Math.round(raw);
 }
 
+/*
+ * The fastest THREE CONSECUTIVE laps of the run, in milliseconds, or null.
+ *
+ * RaceGOW is scored on three consecutive laps where MultiGP's time trial is
+ * scored on one, so a time posted from a room carries both and a time posted
+ * from the field carries the lap alone. Optional everywhere: absent, null and
+ * unusable all mean the same thing, which is that this run did not put three
+ * clean laps together.
+ *
+ * Bounded against the lap it arrived with rather than against a constant.
+ * Three laps of a run cannot be faster than three of its own best lap, and
+ * the posted lap IS the best lap, so anything under 3 x lapMs is not a
+ * measurement, it is a claim the run's own numbers contradict.
+ */
+export function normaliseThreeMs(raw, lapMs) {
+  if (raw == null) {
+    return null;
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return null;
+  }
+  const ms = Math.round(raw);
+  if (ms < 1 || ms > MAX_LAP_MS * 3) {
+    return null;
+  }
+  if (lapMs != null && ms < lapMs * 3) {
+    return null;
+  }
+  return ms;
+}
+
 function isObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -258,6 +289,22 @@ const PLAN_APERTURE = new Set([
   'gate', 'flaggedGate', 'doubleStack', 'flaggedDoubleStack', 'ladder', 'tower', 'diveGate',
 ]);
 
+/*
+ * The track's class, normalised the way the simulator's
+ * src/trackbuilder/elements.js normalises it: anything that is not the word
+ * 'micro' is the sixty metre field. A version 1 or 2 document has no such
+ * key and is a field, which it is.
+ *
+ * It is derived from the stored document on every read rather than kept in
+ * a column, for the same reason the plan is: there is one copy of the truth
+ * and no migration to get wrong.
+ */
+export const TRACK_CLASSES = ['full', 'micro'];
+
+export function trackClassOf(document) {
+  return isObject(document) && document.trackClass === 'micro' ? 'micro' : 'full';
+}
+
 export function planFromDocument(document) {
   const field = isObject(document.field) ? document.field : {};
   const byId = new Map();
@@ -294,6 +341,22 @@ export function planFromDocument(document) {
     const levels = Number(el.dims?.levels);
     const barrierW = Number(el.dims?.width);
     const barrierD = Number(el.dims?.depth);
+    /*
+     * THE GATE'S OWN OPENING, which is the fourth number of that family and
+     * the one that was missing. A gate is 1.524 m on a MultiGP field and
+     * 0.711 on a RaceGOW one, and an author can type any width into either,
+     * so a drawer that assumes one draws every track that is not that one
+     * wrongly: on a 5 by 6 m room it drew every gate a third of the width of
+     * the room.
+     */
+    const clearW = Number(el.dims?.clearW);
+    /* And the start line's length, which is a row rather than one number:
+     * how many stands, how far apart, and how big one is. Four at 1.5 m is a
+     * MultiGP grid; a RaceGOW start is a single 100 mm stand, because there
+     * are no heats and every pilot flies alone at home. */
+    const pads = Number(el.dims?.pads);
+    const spacing = Number(el.dims?.spacing);
+    const padSize = Number(el.dims?.padSize);
     marks.push({
       type,
       x: Number(el.position.x) || 0,
@@ -303,6 +366,10 @@ export function planFromDocument(document) {
       levels: Number.isFinite(levels) && levels > 0 ? levels : undefined,
       w: Number.isFinite(barrierW) && barrierW > 0 ? barrierW : undefined,
       d: Number.isFinite(barrierD) && barrierD > 0 ? barrierD : undefined,
+      clearW: Number.isFinite(clearW) && clearW > 0 ? clearW : undefined,
+      pads: Number.isFinite(pads) && pads > 0 ? pads : undefined,
+      spacing: Number.isFinite(spacing) && spacing >= 0 ? spacing : undefined,
+      padSize: Number.isFinite(padSize) && padSize > 0 ? padSize : undefined,
     });
   }
   const path = [];
@@ -340,9 +407,17 @@ export function planFromDocument(document) {
       numbers.push({ n, x, y, stack });
     }
   }
+  const small = trackClassOf(document) === 'micro';
   return {
-    width: Number(field.width) || 60,
-    depth: Number(field.depth) || 40,
+    /* The class travels with the plan, because the drawer has three sizes it
+     * cannot read off a mark: the marker symbol, and the two fallbacks a
+     * plan with no dimensions falls through to. public/plan.js reads it. */
+    trackClass: small ? 'micro' : 'full',
+    /* A RaceGOW room when the document forgot to say, not a MultiGP field.
+     * Neither producer emits a plan without a field, so this is the last
+     * line rather than the usual one. */
+    width: Number(field.width) || (small ? 5 : 60),
+    depth: Number(field.depth) || (small ? 6 : 40),
     marks,
     path,
     numbers,
@@ -403,13 +478,23 @@ export function inspectDocument(raw) {
     return { error: 'That file is not a track document.' };
   }
   /*
-   * 1 and 2. Version 2 is where a track grew from one logo to five, which
-   * is a branding change and nothing else: field, elements and sequence read
+   * 1, 2 and 3.
+   *
+   * Version 2 is where a track grew from one logo to five, which is a
+   * branding change and nothing else: field, elements and sequence read
    * identically, so a version 1 track already on this board keeps its times
    * when its author republishes it from a newer builder.
+   *
+   * Version 3 is the track CLASS. A version 3 document carries
+   * `trackClass`, which is 'full' for the sixty metre field every track on
+   * this board has been until now, or 'micro' for a RaceGOW room: a 65 mm
+   * whoop, 28 inch gates out of 26.7 mm PVC, and a whole track inside about
+   * 1.4 by 2.1 m. Nothing else about the document moved, so a version 1 or
+   * 2 track keeps its times across a republish from a builder that writes 3,
+   * and every stored track reads as 'full', which is what it is.
    */
-  if (document.schemaVersion !== 1 && document.schemaVersion !== 2) {
-    return { error: 'This board accepts schemaVersion 1 and 2 tracks.' };
+  if (![1, 2, 3].includes(document.schemaVersion)) {
+    return { error: 'This board accepts schemaVersion 1, 2 and 3 tracks.' };
   }
   const id = String(document.id || '');
   if (!TRACK_ID_RE.test(id)) {
@@ -453,6 +538,7 @@ export function inspectDocument(raw) {
     logoCount: branding.images.length,
     gates: gateCount(document),
     elements: document.elements.length,
+    trackClass: trackClassOf(document),
     layoutHash: layoutHash(document),
     plan: planFromDocument(document),
   };
@@ -607,7 +693,16 @@ export function inspectBugPatch(body) {
  *
  *   beginner, technical   how hard, which is the first thing anybody asks
  *   micro, big            how much room it wants, which decides whether it
- *                         is flyable at all on a small screen at speed
+ *                         is flyable at all on a small screen at speed.
+ *                         The `micro` id is printed as "Small field", and
+ *                         that is a RENAME rather than a new tag: it means
+ *                         a five inch track with a small footprint, and it
+ *                         has meant that since before there was a micro
+ *                         CLASS. On a page that now also carries a "65 mm
+ *                         whoop" filter, a tag labelled "Micro" is two
+ *                         different things one word apart. The id cannot
+ *                         move without stranding the tracks that carry it;
+ *                         the label is what the board prints and it can.
  *   freestyle             gates as furniture rather than as a course
  *   showcase              built to be looked at
  *
@@ -623,7 +718,7 @@ export const TAGS = [
   { id: 'freestyle', label: 'Freestyle' },
   { id: 'beginner', label: 'Beginner' },
   { id: 'technical', label: 'Technical' },
-  { id: 'micro', label: 'Micro' },
+  { id: 'micro', label: 'Small field' },
   { id: 'big', label: 'Big field' },
   { id: 'showcase', label: 'Showcase' },
 ];
