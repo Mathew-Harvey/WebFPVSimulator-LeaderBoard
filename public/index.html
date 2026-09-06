@@ -1438,6 +1438,24 @@
       }
       .switch-btn:hover { color: var(--cream); }
 
+      /* One step down from the board switch above it: same shape, less
+         weight, so a reader sees which board first and which aircraft
+         second. It is still a choice rather than a filter, which is why it
+         is this control and not a select in the toolbar. */
+      .switch-craft { margin: -18px 0 22px; }
+      .switch-craft .switch-btn { padding: 9px 14px 10px; }
+      .switch-craft .switch-name { font-size: 15px; }
+      .switch-craft .switch-kicker { font-size: 9px; }
+
+      /* The aircraft switch is hidden on the freestyle board: a run has no
+         track and no class, so the question does not apply there. */
+      .switch-craft[hidden] { display: none; }
+
+      /* Under "Nothing matches that", saying which board the reader is on.
+         Sakura because it is the one line in that box naming something the
+         Clear button will NOT undo. */
+      .empty-craft { color: var(--sakura); font-size: 13px; margin: 6px 0 0; }
+
       .switch-kicker {
         grid-column: 1;
         font-size: 10px;
@@ -1923,6 +1941,35 @@
         </button>
       </nav>
 
+      <!--
+        WHICH AIRCRAFT, AND IT IS A PRIMARY CHOICE RATHER THAN A FILTER.
+
+        A track on this board is one of two things and they are not
+        alternatives to each other. A MultiGP field is 5 ft gates over sixty
+        metres flown on a five inch; a RaceGOW room is 28 inch gates inside
+        about 1.4 by 2.1 m flown on a 65 mm whoop. Offering a whoop pilot a
+        five inch track is offering them a track they cannot fly: the
+        simulator seats the aircraft from the track, so pressing Fly on the
+        wrong one changes their aircraft under them.
+
+        So it sits with the board switch above it and looks like it: same
+        two column grid, same weight, one of the two always chosen. It is
+        remembered, and the simulator's own links carry ?craft= so a pilot
+        arriving from a whoop lands on the whoop board.
+      -->
+      <nav class="switch switch-craft" id="craftswitch" aria-label="Which aircraft">
+        <button type="button" class="switch-btn is-on" id="craft-full" aria-pressed="true">
+          <span class="switch-kicker">Five inch</span>
+          <span class="switch-name">Sixty metre field</span>
+          <span class="switch-count" id="craft-full-count"></span>
+        </button>
+        <button type="button" class="switch-btn" id="craft-micro" aria-pressed="false">
+          <span class="switch-kicker">65 mm whoop</span>
+          <span class="switch-name">RaceGOW room</span>
+          <span class="switch-count" id="craft-micro-count"></span>
+        </button>
+      </nav>
+
       <section id="view-tracks" aria-label="Published tracks">
         <div class="deck" id="deck">
           <div class="deck-main">
@@ -1938,30 +1985,6 @@
               <div class="sort">
                 <label for="by">Built by</label>
                 <select id="by"><option value="">Anyone</option></select>
-              </div>
-              <!--
-                THE AIRCRAFT, WHICH IS ALSO THE CLASS OF THE TRACK.
-
-                A track on this board is one of two things and it is not a
-                preference: a RaceGOW room is 28 inch gates inside about 1.4
-                by 2.1 m and is flown on a 65 mm whoop, a MultiGP field is
-                5 ft gates over sixty metres and is flown on a five inch, and
-                the simulator seats the aircraft from the track rather than
-                asking. So one control answers both questions, and it is
-                labelled with the half a pilot thinks in.
-
-                A select rather than a third row of chips: the tag bar below
-                is a closed vocabulary a reader browses, and this is a choice
-                of one out of three sitting beside the other two choices of
-                one, which is what the two selects either side of it are.
-              -->
-              <div class="sort">
-                <label for="craft">Flown on</label>
-                <select id="craft">
-                  <option value="">Anything</option>
-                  <option value="full">Five inch</option>
-                  <option value="micro">65 mm whoop</option>
-                </select>
               </div>
               <div class="sort">
                 <label for="sort">Order</label>

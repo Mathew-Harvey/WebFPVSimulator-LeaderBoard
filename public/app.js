@@ -313,15 +313,21 @@ const state = {
   tags: new Set(),
   author: '',
   /*
-   * WHICH AIRCRAFT, and on this board that is the same question as which
-   * class of track. A track's class is what it IS: a RaceGOW room is 28 inch
-   * gates inside about 1.4 by 2.1 m and is flown on a 65 mm whoop, a MultiGP
-   * field is 5 ft gates over sixty metres and is flown on a five inch, and
-   * the simulator seats the aircraft from the track rather than the other way
-   * round. So one filter answers both and the label says the part a pilot
-   * cares about. Empty is everything.
+   * WHICH AIRCRAFT, and it is a CHOICE rather than a filter: one of the two
+   * is always on and there is no "anything".
+   *
+   * A track on this board is one of two things and they are not alternatives
+   * to each other. A MultiGP field is 5 ft gates over sixty metres flown on a
+   * five inch; a RaceGOW room is 28 inch gates inside about 1.4 by 2.1 m
+   * flown on a 65 mm whoop. The simulator seats the aircraft from the track,
+   * so offering a whoop pilot a five inch track is offering them one that
+   * changes their aircraft the moment they press Fly.
+   *
+   * 'full' is the default because every track published before there were two
+   * classes is one, and because a first visitor with no simulator behind them
+   * should land on the board this has always been.
    */
-  craft: '',
+  craft: 'full',
   /* The freestyle board. `runs` is null until the fetch answers, which the
    * painter tells apart from an empty board: nothing yet posted and not
    * loaded yet are different sentences. */
@@ -666,11 +672,15 @@ function paintGrid() {
     if (state.tags.size) {
       parts.push(`${[...state.tags].map(tagLabel).join(' and ')}`);
     }
-    if (state.craft) {
-      parts.push(`tracks flown on a ${CRAFT_LABEL[state.craft].toLowerCase()}`);
-    }
+
     const box = el('div', 'empty panel');
     box.append(el('h2', null, 'Nothing matches that'));
+    /* The aircraft is above the filters and is not one of them, so it is
+     * named separately: a reader whose list is empty because they are on the
+     * whoop board and every track is a five inch one needs to be told that,
+     * and it is not something Clear the filters should undo. */
+    box.append(el('p', 'empty-craft',
+      `You are looking at the ${CRAFT_LABEL[state.craft].toLowerCase()} board.`));
     box.append(el('p', null, parts.length
       ? `No track on the board is ${joined(parts)}.`
       : 'No track on the board answers to that.'));
@@ -679,19 +689,18 @@ function paintGrid() {
     clear.addEventListener('click', () => {
       const find = byId('find');
       const by = byId('by');
-      const craft = byId('craft');
+      /* The aircraft is NOT cleared. It is the choice this board is being
+       * read under, not one of the filters narrowing it, and clearing it
+       * would answer a whoop pilot's empty list by moving them to the five
+       * inch board. */
       state.query = '';
       state.author = '';
-      state.craft = '';
       state.tags.clear();
       if (find) {
         find.value = '';
       }
       if (by) {
         by.value = '';
-      }
-      if (craft) {
-        craft.value = '';
       }
       paintTags();
       paintGrid();
@@ -1148,6 +1157,90 @@ function writeView(view) {
   }
 }
 
+const CRAFT_KEY = 'webfpv.board.craft.v1';
+
+/*
+ * Which aircraft this visitor is here for: the link first, then what they
+ * chose last time, then the five inch.
+ *
+ * The link wins because it is the more recent statement of intent, and it is
+ * how the simulator hands its own answer over: a pilot who pressed The board
+ * on the web while seated on a whoop should not arrive on the five inch
+ * board. Both the class and the airframe id are accepted, so a link can
+ * carry whichever of the two the page building it happens to hold.
+ */
+function readCraft() {
+  try {
+    const wanted = new URL(window.location.href).searchParams.get('craft');
+    if (wanted === 'micro' || wanted === 'whoop65') {
+      return 'micro';
+    }
+    if (wanted === 'full' || wanted === '5inch') {
+      return 'full';
+    }
+  } catch (e) {
+    /* No URL to read. Fall through to the remembered answer. */
+  }
+  try {
+    return localStorage.getItem(CRAFT_KEY) === 'micro' ? 'micro' : 'full';
+  } catch (e) {
+    return 'full';
+  }
+}
+
+function writeCraft(craft) {
+  try {
+    localStorage.setItem(CRAFT_KEY, craft === 'micro' ? 'micro' : 'full');
+  } catch (e) {
+    /* Private mode. The choice holds for this visit and not past it. */
+  }
+  try {
+    const url = new URL(window.location.href);
+    if (craft === 'micro') {
+      url.searchParams.set('craft', 'micro');
+    } else {
+      url.searchParams.delete('craft');
+    }
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch (e) {
+    /* No history. The page still works. */
+  }
+}
+
+function showCraft(craft, { write = true } = {}) {
+  state.craft = craft === 'micro' ? 'micro' : 'full';
+  for (const [id, lit] of [['craft-full', state.craft === 'full'], ['craft-micro', state.craft === 'micro']]) {
+    const btn = byId(id);
+    if (btn) {
+      btn.classList.toggle('is-on', lit);
+      btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
+    }
+  }
+  if (write) {
+    writeCraft(state.craft);
+  }
+  paintCraftCounts();
+  paintTags();
+  paintGrid();
+}
+
+/* How many tracks each aircraft has, counted over everything the board
+ * holds rather than over what the other filters leave: this switch is above
+ * them and a count that moved when a search did would read as the switch
+ * being part of the search. */
+function paintCraftCounts() {
+  const by = { full: 0, micro: 0 };
+  for (const t of state.courses) {
+    by[classOf(t)] += 1;
+  }
+  for (const [id, n] of [['craft-full-count', by.full], ['craft-micro-count', by.micro]]) {
+    const cell = byId(id);
+    if (cell) {
+      cell.textContent = n ? plural(n, 'track', 'tracks') : 'none yet';
+    }
+  }
+}
+
 function showView(view, { write = true } = {}) {
   state.view = view === 'freestyle' ? 'freestyle' : 'tracks';
   const on = state.view === 'freestyle';
@@ -1165,6 +1258,13 @@ function showView(view, { write = true } = {}) {
       btn.classList.toggle('is-on', lit);
       btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
     }
+  }
+  /* A freestyle run has no track and no class, so the question does not
+   * apply on that board and the control goes away rather than sitting there
+   * filtering nothing. */
+  const craftSwitch = byId('craftswitch');
+  if (craftSwitch) {
+    craftSwitch.hidden = on;
   }
   if (write) {
     writeView(state.view);
@@ -1558,21 +1658,19 @@ function bindLinks(config) {
   set('foot-credits', credits);
 }
 
+function bindCraftSwitch() {
+  for (const [id, craft] of [['craft-full', 'full'], ['craft-micro', 'micro']]) {
+    const btn = byId(id);
+    if (btn) {
+      btn.addEventListener('click', () => showCraft(craft));
+    }
+  }
+}
+
 function bindToolbar() {
   const find = byId('find');
   const sort = byId('sort');
   const by = byId('by');
-  const craft = byId('craft');
-  if (craft) {
-    craft.value = state.craft;
-    craft.addEventListener('change', () => {
-      state.craft = craft.value === 'micro' || craft.value === 'full' ? craft.value : '';
-      /* Same reason the search repaints them: a tag nobody used on a whoop
-       * track should grey out the moment the board is showing only those. */
-      paintTags();
-      paintGrid();
-    });
-  }
   if (find) {
     find.addEventListener('input', () => {
       state.query = find.value;
@@ -1849,9 +1947,13 @@ async function start() {
 
   byId('toolbar').hidden = false;
   bindToolbar();
+  bindCraftSwitch();
   paintAuthors();
-  paintTags();
-  paintGrid();
+  /* showCraft paints the counts, the tags and the grid, so this is the one
+   * call that has to happen and the three below it do not. It is here rather
+   * than in bindCraftSwitch because the courses have to be in state first:
+   * the counts are over them. */
+  showCraft(readCraft(), { write: false });
   route();
   await hydrate();
   await runsLoaded;
