@@ -32,6 +32,17 @@ The three repositories are one product. `Mathew-Harvey/WebFPVSimulator` holds th
 ## Working rules
 
 - `npm test` runs `src/selftest.js` and is cheap. Run it for anything touching the store, the API surface or validation.
+- **Always ask, before the turn ends, whether to run a verification pass and at what scale.** Somebody looking at the
+  real page against the real database learns in one minute what no self test can see, so whether to spend that minute is
+  their call and not an assumption. Ask on every turn that changed code, including the turns where `npm test` already
+  came back green, because a green check is evidence about the thing it can see and nothing else. Offer the scale
+  plainly and let them pick one:
+  - **none.** The change is documentation or a comment and there is nothing to look at.
+  - **cheap.** `npm test`, seconds of wall clock.
+  - **served.** Start the server against a scratch database and fetch the endpoints and the page that changed.
+  - **look at it.** Hand it over. Say what to open, what to look for and what would count as wrong.
+  The point of asking is that the last one is a real option, and it is often the best one, because this repository's
+  whole job is what a visitor sees.
 - Never report a check as passing without having run it in the same turn. If a check was not run, say so, say why, and say what was done instead. A green check that cannot see the thing that changed is not evidence either.
 - The simulator's `npm run verify` is expensive and does not cover this repository. Do not reach for it here.
 - Never change a threshold to make a check pass. Argue for the change instead.
