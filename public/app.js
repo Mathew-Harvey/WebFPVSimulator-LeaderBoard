@@ -351,22 +351,15 @@ const state = {
    * should land on the board this has always been.
    */
   craft: 'full',
-  /* The freestyle board. `runs` is null until the fetch answers, which the
-   * painter tells apart from an empty board: nothing yet posted and not
-   * loaded yet are different sentences. */
-  runs: null,
-  runsError: '',
-  style: '',
-  view: 'tracks',
   openId: null,
   lastFocus: null,
 };
 
 /* The tag vocabulary, as the board describes it. Served rather than written
  * down here, so the list this page offers and the list the board accepts
- * cannot drift: validate.js is the copy of record. Empty until /api/runs
- * answers, which is why the tag bar paints from the tracks rather than
- * appearing before them. */
+ * cannot drift: validate.js is the copy of record. It rides along with the
+ * track list rather than having a request of its own, so it is empty for
+ * exactly as long as the tracks are. */
 let TAGS = [];
 const TAG_LABEL = new Map();
 
@@ -504,14 +497,86 @@ function visibleCourses() {
 /* A track tile                                                       */
 /* ------------------------------------------------------------------ */
 
+/*
+ * THE CARD ART: A DRAWING ON A FIELD, A LAP IN A ROOM.
+ *
+ * A sixty metre field has a plan worth drawing. The flown line through
+ * twenty gates is the shape of the track, plan.js draws it from the list
+ * payload the card already holds, and it costs no request at all.
+ *
+ * A RaceGOW room is about five metres across with three gates in it, so its
+ * plan is an almost empty rectangle with a dot in the middle. It says
+ * nothing, and what it says nothing about is the part that matters: a room
+ * track is built upwards, and height is the one thing a plan cannot show.
+ * So a room carries the builder's own animation of the lap, rendered once
+ * by the browser that published it and served by this board as a file.
+ *
+ * It is an <img>, which is the whole reason this can sit in a grid: no
+ * WebGL, no iframe, no second copy of the simulator. Lazy, so a board of
+ * rooms below the fold costs nothing until it is scrolled to. Sized by the
+ * stylesheet before the bytes arrive, so nothing reflows as they land.
+ *
+ * Which tracks may have one is the BOARD's rule, not this page's: inspectGif
+ * in src/validate.js refuses an animation for a field track, so hasGif is
+ * already the answer to "is this a room with a lap on file".
+ */
+function gifSrc(track) {
+  const at = track.gifUtc ? `?v=${encodeURIComponent(track.gifUtc)}` : '';
+  return here(`api/tracks/${encodeURIComponent(track.id)}/gif${at}`);
+}
+
+function cardArt(track) {
+  /*
+   * REDUCED MOTION GETS THE PLAN, and it has to be decided here rather than
+   * in the stylesheet, because a GIF loops on its own and no CSS can stop
+   * it. The plan says less about a room than the animation does, and it is
+   * the one thing on this page that says anything at all without moving, so
+   * it is what a reader who asked for stillness is given.
+   */
+  if (!track.hasGif || reduceMotion()) {
+    return planCanvas(track.plan, planLabel(track));
+  }
+  const img = document.createElement('img');
+  img.className = 'gif-art';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.src = gifSrc(track);
+  img.alt = gifLabel(track);
+  /*
+   * A board whose animation is missing, or whose bytes never arrive, falls
+   * back to the drawing rather than to a broken image icon. The animation
+   * is stored separately from the track, so the two CAN disagree: a row
+   * whose GIF was dropped by a relayout between the list being fetched and
+   * the card being drawn is exactly this case.
+   */
+  img.addEventListener('error', () => {
+    if (img.parentElement) {
+      const plan = planCanvas(track.plan, planLabel(track));
+      img.replaceWith(plan);
+      paintPlans(plan.parentElement || document);
+    }
+  }, { once: true });
+  return img;
+}
+
+/* What a screen reader is told the animation is. Not "plan of": it is a lap
+ * being flown, and the room it is flown in is not a field. */
+function gifLabel(track) {
+  const plan = track.plan || {};
+  const w = Math.round(Number(plan.width) || 0);
+  const d = Math.round(Number(plan.depth) || 0);
+  const gates = track.gates === 1 ? '1 gate' : `${track.gates} gates`;
+  return `A lap of ${track.name}, ${gates} in a ${w} by ${d} metre room.`;
+}
+
 function cardFor(track, config) {
   const card = el('article', 'card');
   card.dataset.id = track.id;
 
   const tile = el('a', 'tile');
   tile.href = courseHref(track.id);
-  tile.setAttribute('aria-label', `${track.name}, plan and times`);
-  tile.append(planCanvas(track.plan, planLabel(track)));
+  tile.setAttribute('aria-label', `${track.name}, ${track.hasGif ? 'a lap' : 'plan'} and times`);
+  tile.append(cardArt(track));
   const size = fieldSize(track);
   if (size) {
     tile.append(el('span', 'tile-chip', size));
@@ -700,10 +765,10 @@ function paintGrid() {
     box.append(el('h2', null, 'Nothing matches that'));
     /* The aircraft is above the filters and is not one of them, so it is
      * named separately: a reader whose list is empty because they are on the
-     * whoop board and every track is a five inch one needs to be told that,
+     * whoop side and every track is a five inch one needs to be told that,
      * and it is not something Clear the filters should undo. */
     box.append(el('p', 'empty-craft',
-      `You are looking at the ${CRAFT_LABEL[state.craft].toLowerCase()} board.`));
+      `You are looking at the ${CRAFT_LABEL[state.craft].toLowerCase()} tracks.`));
     box.append(el('p', null, parts.length
       ? `No track on the board is ${joined(parts)}.`
       : 'No track on the board answers to that.'));
@@ -712,10 +777,10 @@ function paintGrid() {
     clear.addEventListener('click', () => {
       const find = byId('find');
       const by = byId('by');
-      /* The aircraft is NOT cleared. It is the choice this board is being
+      /* The aircraft is NOT cleared. It is the choice this page is being
        * read under, not one of the filters narrowing it, and clearing it
        * would answer a whoop pilot's empty list by moving them to the five
-       * inch board. */
+       * inch tracks. */
       state.query = '';
       state.author = '';
       state.tags.clear();
@@ -942,7 +1007,6 @@ function paintStats() {
         plural(n, 'track', 'tracks'),
         plural(times, 'time', 'times'),
         pilots ? plural(pilots, 'pilot', 'pilots') : '',
-        state.runs && state.runs.length ? plural(state.runs.length, 'run', 'runs') : '',
       ])
       : '';
   }
@@ -997,188 +1061,11 @@ async function hydrate() {
   }));
   paintRail();
   paintStats();
-  paintSwitch();
 }
 
 /* ------------------------------------------------------------------ */
-/* The freestyle board                                                 */
+/* The switch, which is the aircraft and nothing else                   */
 /* ------------------------------------------------------------------ */
-
-/*
- * A score, with thousands separators and no locale. Same reason the
- * simulator's formatScore does it by hand: a score reads the same way in
- * every language this ships in, and Intl builds a formatter object per
- * call for a job that is a loop over three characters.
- */
-function formatScore(n) {
-  let digits = String(Math.round(Math.abs(Number(n) || 0)));
-  let out = '';
-  while (digits.length > 3) {
-    out = `,${digits.slice(-3)}${out}`;
-    digits = digits.slice(0, -3);
-  }
-  return digits + out;
-}
-
-/* 2:00, from the run's own clock. A run is two minutes, so this is almost
- * always the same string, and it is printed anyway because a run that ended
- * early is exactly the case a reader wants to see. */
-function formatRunTime(ms) {
-  const total = Math.round((Number(ms) || 0) / 1000);
-  const m = Math.floor(total / 60);
-  return `${m}:${String(total - m * 60).padStart(2, '0')}`;
-}
-
-function freestyleHref(config) {
-  return `${config.simOrigin}/?map=city&board=${encodeURIComponent(config.boardOrigin)}`;
-}
-
-function visibleRuns() {
-  const runs = state.runs || [];
-  return state.style ? runs.filter((r) => r.style === state.style) : runs;
-}
-
-/*
- * One high score row.
- *
- * The first line is the arcade: rank, name, a dot leader, a score, all
- * fixed pitch and all upper case. The second is prose in the page's own
- * voice, because "31 tricks, best chain 9,100" is a sentence about a run
- * and not a readout, and putting it in the cabinet's face too would make
- * the row shout twice.
- */
-function runRow(run, i) {
-  const li = el('li', `hs-row${i < 3 ? ` top${i + 1}` : ''}`);
-  li.append(el('span', 'hs-rank', String(i + 1).padStart(2, '0')));
-  li.append(el('span', 'hs-name', run.name));
-  li.append(el('span', 'hs-dots'));
-  li.append(el('span', 'hs-score', formatScore(run.score)));
-
-  const of = el('p', 'hs-of');
-  const bits = [];
-  bits.push(`${plural(run.tricks, 'trick', 'tricks')}, ${run.unique} of them different`);
-  if (run.bestCombo > 0) {
-    bits.push(`best chain ${formatScore(run.bestCombo)}`);
-  }
-  if (run.signature) {
-    bits.push(`biggest was a ${run.signature}`);
-  }
-  bits.push(run.crashes === 0 ? 'no crashes' : plural(run.crashes, 'crash', 'crashes'));
-  bits.push(formatRunTime(run.durationMs));
-  of.append(joined(bits));
-  /*
-   * The physics model, named rather than ranked separately. Arcade turns
-   * off propwash, gyro noise and build asymmetry, so it is an easier
-   * machine and an arcade run is not the same sport as an expert one.
-   * Hiding that and ranking them together would be the board lying by
-   * omission; a separate table would split a small board in half. So both
-   * are here, both are labelled, and the reader has a filter.
-   */
-  const model = el('span', `hs-model${run.style === 'arcade' ? ' easy' : ''}`, run.style);
-  model.title = run.style === 'arcade'
-    ? 'Flown on the arcade physics model: no propwash, no gyro noise, no build asymmetry'
-    : 'Flown on the full physics model';
-  of.append(model);
-  of.append(` \u00b7 ${formatAgo(run.postedUtc)}`);
-  li.append(of);
-  return li;
-}
-
-function paintArcade() {
-  const host = byId('arcade-board');
-  const countCell = byId('run-count');
-  if (!host) {
-    return;
-  }
-  host.textContent = '';
-  const config = state.config;
-
-  if (state.runs === null) {
-    host.append(el('div', 'screenbox', state.runsError || 'Reading the board.'));
-    if (countCell) {
-      countCell.textContent = '';
-    }
-    return;
-  }
-
-  const runs = visibleRuns();
-  if (countCell) {
-    countCell.textContent = runs.length === (state.runs || []).length
-      ? plural(runs.length, 'run', 'runs')
-      : `${runs.length} of ${plural(state.runs.length, 'run', 'runs')}`;
-  }
-
-  const screen = el('div', 'screenbox');
-  if (!runs.length) {
-    const empty = el('div', 'hs-empty');
-    /*
-     * The one blinking thing on the page, and it is the one an arcade
-     * cabinet blinks: the prompt on an empty attract screen. It carries
-     * nothing the paragraph under it does not say, so reduced motion
-     * stopping it hides no meaning.
-     */
-    empty.append(el('span', 'coin', state.style ? 'No runs on that model' : 'Be the first'));
-    empty.append(el('p', null, state.style
-      ? 'Nobody has posted a run on that physics model yet. Try both, or go and fly one.'
-      : 'Nobody has posted a freestyle run yet. Open the town, fly for two minutes, and put your name at the top of an empty board.'));
-    const actions = el('div', 'actions');
-    const fly = el('a', 'btn primary', 'Fly the town');
-    fly.href = freestyleHref(config);
-    fly.target = SIM_WINDOW;
-    actions.append(fly);
-    empty.append(actions);
-    screen.append(empty);
-    host.append(screen);
-    return;
-  }
-
-  const list = el('ol', 'hs');
-  runs.forEach((run, i) => list.append(runRow(run, i)));
-  screen.append(list);
-  host.append(screen);
-
-  const foot = el('div', 'hs-foot');
-  foot.append(el('p', null, 'One entry per pilot, and only your best. Scores are what the simulator reports, so they are as honest as the pilot who posted them.'));
-  const fly = el('a', 'btn primary', 'Fly a run');
-  fly.href = freestyleHref(config);
-  fly.target = SIM_WINDOW;
-  foot.append(fly);
-  host.append(foot);
-}
-
-/* ------------------------------------------------------------------ */
-/* The switch between the two boards                                   */
-/* ------------------------------------------------------------------ */
-
-/*
- * ?view=freestyle, not #freestyle. route() owns the hash and clearHash()
- * wipes it whole, so a hash tab would be thrown away by Escape and by the
- * sheet's Close button. The query string survives both, and a track sheet
- * therefore still opens over either board and closes back onto it.
- */
-function viewFromUrl() {
-  try {
-    return new URLSearchParams(window.location.search).get('view') === 'freestyle'
-      ? 'freestyle'
-      : 'tracks';
-  } catch (e) {
-    return 'tracks';
-  }
-}
-
-function writeView(view) {
-  try {
-    const url = new URL(window.location.href);
-    if (view === 'freestyle') {
-      url.searchParams.set('view', 'freestyle');
-    } else {
-      url.searchParams.delete('view');
-    }
-    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-  } catch (e) {
-    /* No history, as in a very old browser. The page still works. */
-  }
-}
 
 const CRAFT_KEY = 'webfpv.board.craft.v1';
 
@@ -1261,54 +1148,6 @@ function paintCraftCounts() {
     if (cell) {
       cell.textContent = n ? plural(n, 'track', 'tracks') : 'none yet';
     }
-  }
-}
-
-function showView(view, { write = true } = {}) {
-  state.view = view === 'freestyle' ? 'freestyle' : 'tracks';
-  const on = state.view === 'freestyle';
-  const tracks = byId('view-tracks');
-  const free = byId('view-freestyle');
-  if (tracks) {
-    tracks.hidden = on;
-  }
-  if (free) {
-    free.hidden = !on;
-  }
-  for (const [id, lit] of [['switch-tracks', !on], ['switch-freestyle', on]]) {
-    const btn = byId(id);
-    if (btn) {
-      btn.classList.toggle('is-on', lit);
-      btn.setAttribute('aria-pressed', lit ? 'true' : 'false');
-    }
-  }
-  /* A freestyle run has no track and no class, so the question does not
-   * apply on that board and the control goes away rather than sitting there
-   * filtering nothing. */
-  const craftSwitch = byId('craftswitch');
-  if (craftSwitch) {
-    craftSwitch.hidden = on;
-  }
-  if (write) {
-    writeView(state.view);
-  }
-  if (on) {
-    paintArcade();
-  }
-}
-
-function paintSwitch() {
-  const tracksCell = byId('switch-tracks-count');
-  const runsCell = byId('switch-runs-count');
-  if (tracksCell) {
-    tracksCell.textContent = state.courses.length
-      ? plural(state.courses.length, 'track', 'tracks')
-      : '';
-  }
-  if (runsCell) {
-    runsCell.textContent = state.runs && state.runs.length
-      ? plural(state.runs.length, 'run', 'runs')
-      : '';
   }
 }
 
@@ -1728,60 +1567,22 @@ function bindToolbar() {
   }
 }
 
-function bindSwitch() {
-  for (const [id, view] of [['switch-tracks', 'tracks'], ['switch-freestyle', 'freestyle']]) {
-    const btn = byId(id);
-    if (btn) {
-      btn.addEventListener('click', () => showView(view));
-    }
-  }
-  const style = byId('style');
-  if (style) {
-    style.value = state.style;
-    style.addEventListener('change', () => {
-      state.style = style.value;
-      paintArcade();
-    });
-  }
-}
-
 /*
- * The freestyle board, fetched once. It is NOT fatal and it is not awaited
- * before the tracks paint: a board whose freestyle table is down should
- * still show forty tracks, and the switch says how many runs there are so
- * it has to be able to say none.
+ * The tag vocabulary, taken off the track list's own payload.
+ *
+ * It used to ride the freestyle board's request, which is gone, and the
+ * board is the copy of record for which tags are legal so it cannot simply
+ * be written down here. /api/tracks carries it now: one request, and the
+ * list this page offers and the list the board accepts cannot drift.
  */
-async function loadRuns() {
-  try {
-    const res = await fetch(here('api/runs'));
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(body.error || `The board answered ${res.status}.`);
-    }
-    state.runs = body.runs || [];
-    /* The tag vocabulary rides along with this request rather than having
-     * one of its own: it is small, it is served from the same file that
-     * decides which tags are legal, and one request is one request. */
-    if (Array.isArray(body.tags) && body.tags.length) {
-      TAGS = body.tags;
-      TAG_LABEL.clear();
-      for (const tag of TAGS) {
-        TAG_LABEL.set(tag.id, tag.label);
-      }
-    }
-  } catch (e) {
-    state.runs = null;
-    state.runsError = e.message || 'The freestyle board could not be loaded.';
+function readTags(payload) {
+  if (!Array.isArray(payload.tags) || !payload.tags.length) {
+    return;
   }
-  paintSwitch();
-  paintTags();
-  /* Repaint the cards, because the tag labels arrived with this request and
-   * the cards drew their tags before they had names for them. */
-  if (state.courses.length) {
-    paintGrid();
-  }
-  if (state.view === 'freestyle') {
-    paintArcade();
+  TAGS = payload.tags;
+  TAG_LABEL.clear();
+  for (const tag of TAGS) {
+    TAG_LABEL.set(tag.id, tag.label);
   }
 }
 
@@ -1878,7 +1679,7 @@ async function start() {
   /*
    * The status matters. Reading the body and ignoring `r.ok` meant a 500
    * from the database, or a 502 from in front of it, parsed to an object
-   * with no `tracks` in it and painted "The board is empty": the one screen
+   * with no `tracks` in it and painted "Nothing published yet": the one screen
    * that tells a visitor to go and build the first track, shown while
    * every track on the board was sitting there unreachable. An error
    * belongs in the catch below, which already has a panel for it.
@@ -1907,20 +1708,6 @@ async function start() {
   bindLinks(state.config);
 
   /*
-   * THE SWITCH IS BOUND AND SHOWN BEFORE ANYTHING IS FETCHED.
-   *
-   * start() returns early in three places below, on a failed tracks
-   * request and on an empty board, and an empty board is exactly the board
-   * a new feature launches on. A freestyle section wired after those
-   * returns would be invisible on the one board that most needs it, so it
-   * is wired here, before the first request, and the runs request is fired
-   * without being awaited.
-   */
-  bindSwitch();
-  showView(viewFromUrl(), { write: false });
-  const runsLoaded = loadRuns();
-
-  /*
    * The config request is NOT fatal, and the tracks request is.
    *
    * They used to share one try, so a 500 on config threw the whole page away
@@ -1945,26 +1732,24 @@ async function start() {
   try {
     const payload = await getJson(here('api/tracks'));
     state.courses = payload.tracks || [];
+    readTags(payload);
   } catch (e) {
     list.textContent = '';
-    notice.append(el('div', 'status panel', e.message || 'The board could not be loaded.'));
-    await runsLoaded;
+    notice.append(el('div', 'status panel', e.message || 'This page could not be loaded.'));
     return;
   }
 
   paintStats();
-  paintSwitch();
   if (!state.courses.length) {
     list.textContent = '';
     const box = el('div', 'empty panel');
-    box.append(el('h2', null, 'The board is empty'));
-    box.append(el('p', null, 'Build a track in the track builder, set a flying order, and publish it. The board starts when the first track lands.'));
+    box.append(el('h2', null, 'Nothing published yet'));
+    box.append(el('p', null, 'Build a track in the track builder, set a flying order, and publish it. This page starts when the first track lands.'));
     const build = el('a', 'btn primary', 'Build a track');
     build.href = `${state.config.simOrigin}/src/trackbuilder/index.html`;
     build.target = SIM_WINDOW;
     box.append(build);
     notice.append(box);
-    await runsLoaded;
     return;
   }
 
@@ -1979,7 +1764,6 @@ async function start() {
   showCraft(readCraft(), { write: false });
   route();
   await hydrate();
-  await runsLoaded;
 }
 
 start();

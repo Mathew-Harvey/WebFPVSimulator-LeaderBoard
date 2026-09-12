@@ -305,6 +305,103 @@ export function trackClassOf(document) {
   return isObject(document) && document.trackClass === 'micro' ? 'micro' : 'full';
 }
 
+/* ------------------------------------------------------------------ */
+/* The card animation                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A TRACK'S ANIMATION, WHICH THIS BOARD STORES AND DOES NOT MAKE.
+ *
+ * The board renders nothing. A GIF is one lap of the track flown past the
+ * gates, drawn by the simulator's own src/trackbuilder/animate.js in a real
+ * WebGL context, and it arrives here as bytes the way a logo arrives inside
+ * a document. What happens below is therefore not a picture being made, it
+ * is a stranger's upload being bounded.
+ *
+ * WHY ONLY A ROOM GETS ONE, and this is the rule rather than a default the
+ * caller may override. A sixty metre field has a plan worth drawing: the
+ * flown line through twenty gates, read at a glance, and public/plan.js
+ * already draws it from the list payload at no cost at all. A RaceGOW room
+ * is five metres across with three gates in it, so its plan is an almost
+ * empty rectangle with a dot in the middle, which says nothing about a
+ * track whose whole difficulty is vertical. The animation is what a reader
+ * needs there and the plan is what a reader needs on a field.
+ *
+ * It is enforced here rather than in the page, so that the rule has one
+ * home. Twenty nine field tracks silently gaining a quarter of a megabyte
+ * each because some future publisher uploaded one anyway is exactly the
+ * thing a rule in the page would not stop. If this is ever wanted on a
+ * field track, this function is the one line to change.
+ */
+
+/* Two and a half megabytes of base64, which is about 1.8 MB of GIF. The
+ * card animations this was written for come in between 20 and 70 kB at 16
+ * by 10, so the cap is two orders of magnitude clear of the thing it is
+ * meant to allow and still small enough to refuse a video somebody renamed. */
+export const MAX_GIF_BASE64_CHARS = 2_500_000;
+
+const GIF_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/*
+ * GIF87a or GIF89a, and then the logical screen descriptor's own width and
+ * height, little endian, which is the only place in the file those numbers
+ * live. Reading them costs ten bytes and catches the two uploads that would
+ * otherwise get through: a file that is not a GIF at all, and a GIF of one
+ * pixel standing in for a track.
+ */
+function readGifHeader(bytes) {
+  if (bytes.length < 10) {
+    return null;
+  }
+  const magic = String.fromCharCode(...bytes.subarray(0, 6));
+  if (magic !== 'GIF89a' && magic !== 'GIF87a') {
+    return null;
+  }
+  return {
+    width: bytes[6] | (bytes[7] << 8),
+    height: bytes[8] | (bytes[9] << 8),
+  };
+}
+
+/*
+ * The upload, checked against the track it claims to be of.
+ *
+ * `document` is the stored track document, so the class rule above is read
+ * off the copy of record rather than off anything the uploader said.
+ */
+export function inspectGif({ base64, document }) {
+  if (trackClassOf(document) !== 'micro') {
+    return { error: 'This board keeps an animation for a room, not for a field track.' };
+  }
+  const packed = String(base64 || '').replace(/^data:image\/gif;base64,/, '').trim();
+  if (!packed) {
+    return { error: 'That upload carried no animation.' };
+  }
+  if (packed.length > MAX_GIF_BASE64_CHARS) {
+    return { error: 'That animation is too large for this board.' };
+  }
+  if (!GIF_BASE64_RE.test(packed)) {
+    return { error: 'That animation is not base64.' };
+  }
+  let bytes;
+  try {
+    bytes = Buffer.from(packed, 'base64');
+  } catch (e) {
+    return { error: 'That animation is not base64.' };
+  }
+  const head = readGifHeader(bytes);
+  if (!head) {
+    return { error: 'That upload is not a GIF.' };
+  }
+  /* Sixty four is under any framing this produces and over any tracking
+   * pixel; 4096 is over any card and under a frame buffer somebody is
+   * trying to store here. */
+  if (head.width < 64 || head.height < 64 || head.width > 4096 || head.height > 4096) {
+    return { error: 'That animation is not a usable size.' };
+  }
+  return { bytes, width: head.width, height: head.height };
+}
+
 export function planFromDocument(document) {
   const field = isObject(document.field) ? document.field : {};
   const byId = new Map();

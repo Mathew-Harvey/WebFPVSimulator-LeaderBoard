@@ -35,6 +35,57 @@ function check(name, cond, detail = '') {
   console.log(`  FAIL  ${name}${detail ? `  ${detail}` : ''}`);
 }
 
+/*
+ * A RaceGOW room: a 5 by 6 m field, a 28 inch gate out of 26.7 mm PVC and a
+ * single 100 mm start stand, because there are no heats and every pilot
+ * flies alone at home. It is the only kind of track this board keeps a card
+ * animation for, so both halves of this file want one and both want the
+ * same one.
+ */
+/*
+ * A structurally valid, and entirely empty, 64 by 64 GIF89a: the signature,
+ * the logical screen descriptor, and the trailer. inspectGif reads the first
+ * ten bytes and the byte count, so this exercises everything the board does
+ * with an upload without a hundred kilobytes of rendered track in the source
+ * of a test file. The real ones come out of the simulator's animate.js.
+ */
+const GIF_64 = Buffer.concat([
+  Buffer.from('GIF89a', 'latin1'),
+  Buffer.from([64, 0, 64, 0, 0x00, 0x00, 0x00]),
+  Buffer.from([0x3b]),
+]);
+
+/* The token the http half starts its server with, so both halves of the
+ * admin path are exercised: it opens the door, and an unset one has no
+ * door at all. */
+const ADMIN_TOKEN = 'selftest-admin-token';
+
+function roomDoc(id = 'trk-2b3c4d5e') {
+  const room = sampleDoc(id, {
+    elements: [
+      {
+        id: 'el-1',
+        type: 'startPads',
+        position: { x: 0, y: 1.5, z: 0 },
+        yaw: 0,
+        dims: { pads: 1, spacing: 0.3, padSize: 0.1 },
+      },
+      {
+        id: 'el-2',
+        type: 'gate',
+        position: { x: 0, y: 0.6, z: 0 },
+        yaw: 0,
+        dims: { clearW: 0.7112, clearH: 0.7112, sillH: 0, levels: 1 },
+      },
+    ],
+    sequence: [{ id: 'seq-1', elementId: 'el-2', apertureIndex: 0, entry: 1 }],
+  });
+  room.schemaVersion = 3;
+  room.trackClass = 'micro';
+  room.field = { width: 5, depth: 6, gridSize: 0.0254 };
+  return room;
+}
+
 function sampleDoc(id = 'trk-1a2b3c4d', extra = {}) {
   return {
     schemaVersion: 1,
@@ -199,28 +250,7 @@ async function testValidate() {
    * Held at the MultiGP figures, that plan drew a gate a third of the width
    * of the room and a start line two thirds of the way across it.
    */
-  const room = sampleDoc('trk-2b3c4d5e', {
-    elements: [
-      {
-        id: 'el-1',
-        type: 'startPads',
-        position: { x: 0, y: 1.5, z: 0 },
-        yaw: 0,
-        dims: { pads: 1, spacing: 0.3, padSize: 0.1 },
-      },
-      {
-        id: 'el-2',
-        type: 'gate',
-        position: { x: 0, y: 0.6, z: 0 },
-        yaw: 0,
-        dims: { clearW: 0.7112, clearH: 0.7112, sillH: 0, levels: 1 },
-      },
-    ],
-    sequence: [{ id: 'seq-1', elementId: 'el-2', apertureIndex: 0, entry: 1 }],
-  });
-  room.schemaVersion = 3;
-  room.trackClass = 'micro';
-  room.field = { width: 5, depth: 6, gridSize: 0.0254 };
+  const room = roomDoc();
   const roomOut = inspectDocument(room);
   check('accepts a RaceGOW room', !roomOut.error, roomOut.error);
   check('and reads its class', roomOut.trackClass === 'micro', roomOut.trackClass);
@@ -556,6 +586,7 @@ async function testHttp() {
       BOARD_FILE: join(dir, 'board.json'),
       DATABASE_URL: '',
       SIM_ORIGIN: 'http://127.0.0.1:8000',
+      BOARD_ADMIN_TOKEN: ADMIN_TOKEN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -635,7 +666,7 @@ async function testHttp() {
     });
     check('a ghost for a different lap is refused', wrongLap.status === 400);
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
-    check('the page is served', html.includes('The board') && html.includes('app.js'));
+    check('the page is served', html.includes('Tracks and Times') && html.includes('app.js'));
     /* Relative, not root absolute. The board is served at its own root here
      * and under /board/ on webfpv.org, and a leading slash on either of these
      * asks the landing page for the board's script. The old assertion above
@@ -674,11 +705,14 @@ async function testHttp() {
     const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
       simAnchors.length === 7 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
-    /* Eight: the card's Fly, the sheet's Fly and Remix, the header and
-     * footer rewrite helper, the empty-board Build link, the chase link
-     * builder the podium and the sheet's table both go through, and the
-     * freestyle board's two Fly buttons, one on an empty board and one
-     * under a full one. Credits uses the same rewrite helper.
+    /* Six: the card's Fly, the sheet's Fly and Remix, the header and
+     * footer rewrite helper, the empty-page Build link, and the chase link
+     * builder the podium and the sheet's table both go through. Credits
+     * uses the same rewrite helper.
+     *
+     * It was eight while the freestyle board had a Fly button on an empty
+     * table and another under a full one. That board is gone, so those two
+     * links are gone, and the number moved because the page did.
      *
      * The number is the point of the check rather than a detail of it: a
      * new link that forgets the tab name opens a fresh simulator on every
@@ -686,7 +720,7 @@ async function testHttp() {
      * and the page looks perfectly correct while doing it. */
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
-      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 8);
+      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 6);
     check('nothing app.js builds opens a bare new tab or asks for noopener',
       !app.includes("'_blank'") && !app.includes("noopener'"));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
@@ -952,6 +986,133 @@ async function testHttp() {
     const stillTracks = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
     check('and none of it disturbed the tracks',
       stillTracks.tracks.some((t) => t.id === 'trk-1a2b3c4d'));
+    /* The tag vocabulary moved here from the freestyle board's request when
+     * that board left the page, and the page reads it off this payload. */
+    check('the track list carries the tag vocabulary',
+      Array.isArray(stillTracks.tags) && stillTracks.tags.some((t) => t.id === 'skills'));
+
+    /* ---------------------------------------------------------------- */
+    /* The card animation                                                 */
+    /* ---------------------------------------------------------------- */
+
+    console.log('\nthe card animation');
+
+    const roomPosted = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: 'Ada Rook', document: roomDoc() }),
+    });
+    const roomBody = await roomPosted.json();
+    check('publish a room', roomPosted.status === 201 && Boolean(roomBody.editKey));
+    const roomKey = roomBody.editKey;
+
+    const noArt = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif');
+    check('a track with no animation is a 404, not an empty image', noArt.status === 404);
+
+    const up = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: roomKey, gif: GIF_64.toString('base64') }),
+    });
+    const upBody = await up.json();
+    check('the browser that published a room can upload its animation',
+      up.status === 200 && upBody.bytes === GIF_64.length, JSON.stringify(upBody));
+
+    const served = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif');
+    const servedBytes = Buffer.from(await served.arrayBuffer());
+    check('and it comes back as an image, byte for byte',
+      served.status === 200
+      && served.headers.get('content-type') === 'image/gif'
+      && servedBytes.equals(GIF_64));
+    /* The card's src carries gifUtc, so this response may be cached hard.
+     * It is the only one on the board that is not no-store. */
+    check('and it is cacheable, which nothing else here is',
+      /max-age=\d\d\d/.test(served.headers.get('cache-control') || ''),
+      served.headers.get('cache-control'));
+
+    const withArt = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    const roomRow = withArt.tracks.find((t) => t.id === 'trk-2b3c4d5e');
+    const fieldRow = withArt.tracks.find((t) => t.id === 'trk-1a2b3c4d');
+    check('the list says there is one, and does not carry it',
+      roomRow.hasGif === true && Boolean(roomRow.gifUtc)
+      && !JSON.stringify(roomRow).includes(GIF_64.toString('base64')));
+    check('and a field track says there is not', fieldRow.hasGif === false);
+
+    /*
+     * A FIELD TRACK IS REFUSED ONE, and this is the rule rather than a
+     * default: a sixty metre course has a plan worth drawing and public
+     * plan.js draws it for nothing. Enforced in the board because a rule
+     * enforced in the page is a rule the next publisher walks past.
+     */
+    const onField = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: 'whatever', gif: GIF_64.toString('base64') }),
+    });
+    check('a field track is refused an animation', onField.status === 400);
+
+    const wrongKey = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: 'not-the-key', gif: GIF_64.toString('base64') }),
+    });
+    check('another browser cannot overwrite it', wrongKey.status === 403);
+
+    const notAGif = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: roomKey, gif: Buffer.from('not a gif at all').toString('base64') }),
+    });
+    check('and a file that is not a GIF is refused', notAGif.status === 400);
+
+    const tiny = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.from([1, 0, 1, 0]), Buffer.from([0x3b])]);
+    const tooSmall = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: roomKey, gif: tiny.toString('base64') }),
+    });
+    check('and a one pixel GIF is refused', tooSmall.status === 400);
+
+    /* The one way past the edit key, for the rooms published before any of
+     * this existed. Unset, there is no such way. */
+    const asAdmin = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ gif: GIF_64.toString('base64') }),
+    });
+    check('the admin token can upload without an edit key', asAdmin.status === 200);
+
+    /*
+     * A RELAYOUT THROWS IT AWAY AND A RENAME DOES NOT. It is a picture of a
+     * layout, so it goes for the same reason the times go.
+     */
+    const renamedRoom = roomDoc();
+    renamedRoom.name = 'The same room, renamed';
+    const roomRenamed = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: 'Ada Rook', document: renamedRoom, editKey: roomKey }),
+    });
+    check('a rename republishes the room', roomRenamed.status === 200);
+    const afterRename = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('and the animation is still there',
+      afterRename.tracks.find((t) => t.id === 'trk-2b3c4d5e').hasGif === true);
+
+    const movedRoom = roomDoc();
+    movedRoom.elements[1].position = { x: 1, y: 1.2, z: 0 };
+    const roomMoved = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: 'Ada Rook', document: movedRoom, editKey: roomKey }),
+    });
+    const movedBody = await roomMoved.json();
+    check('moving a gate republishes and clears the times',
+      roomMoved.status === 200 && movedBody.timesCleared === true, JSON.stringify(movedBody));
+    const afterMove = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('and the animation goes with them, because it is a picture of the old layout',
+      afterMove.tracks.find((t) => t.id === 'trk-2b3c4d5e').hasGif === false);
+    const goneArt = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif');
+    check('so the image is a 404 again', goneArt.status === 404);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });

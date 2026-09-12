@@ -150,3 +150,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS runs_public_id
 -- differently on Tuesday does not get a second row.
 CREATE UNIQUE INDEX IF NOT EXISTS runs_pilot_map
   ON runs (map, lower(name));
+
+-- The card animation: one lap of the track, drawn by the simulator's own
+-- src/trackbuilder/animate.js and uploaded here as a finished GIF. The board
+-- renders nothing, so this is storage and not a picture being made.
+--
+-- Only a RaceGOW room carries one, and that rule lives in inspectGif in
+-- src/validate.js rather than in a constraint here, because it is read off
+-- the stored document's class and a CHECK cannot see into JSONB without
+-- being a second copy of trackClassOf. A field track's plan is worth
+-- drawing and public/plan.js draws it for nothing; a room's plan is an
+-- almost empty rectangle.
+--
+-- BYTEA rather than base64 in a TEXT column: a GIF is bytes, the API serves
+-- it as bytes, and base64 would be a third more of them for nothing. Null
+-- means no animation, which is every row until one is uploaded.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gif BYTEA;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gif_utc TIMESTAMPTZ;

@@ -77,6 +77,13 @@ services:
       - key: BUGS_TOKEN
         sync: false
 
+      # Optional. The browser that published a track can upload that track's
+      # card animation with the edit key it already holds, so this is only
+      # for the rooms published before animations existed. Sync it from the
+      # dashboard, and leave it unset if you do not need it.
+      - key: BOARD_ADMIN_TOKEN
+        sync: false
+
 databases:
   - name: webfpvleaderboard-db
     plan: free

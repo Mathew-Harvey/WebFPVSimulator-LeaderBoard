@@ -141,6 +141,16 @@ function byLap(a, b) {
   return a.lapMs - b.lapMs || String(a.postedUtc).localeCompare(String(b.postedUtc));
 }
 
+/* The answer to an upload whose key does not open the track it names. It
+ * is worded as a fact about the key rather than about the track, because
+ * unlike a publish there is nothing useful the stranger can do instead: a
+ * copy under a new name is not an answer to "your animation was refused".
+ * 403 rather than 409 for the same reason, it is not a collision. */
+const NOT_YOURS = {
+  error: 'That track was published from another browser, so this one cannot change its animation.',
+  status: 403,
+};
+
 /* One 409, so the three publish paths cannot word it three ways. */
 const CONFLICT = {
   error: 'This track is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
@@ -171,6 +181,16 @@ function summaryOf(track, times) {
      * list must read as an empty one rather than as undefined: the page
      * filters on it and a card prints it. */
     tags: Array.isArray(track.tags) ? track.tags : [],
+    /* WHETHER THERE IS AN ANIMATION, NOT THE ANIMATION.
+     *
+     * The bytes are tens of kilobytes and a listing is the whole board, so
+     * a list that carried them would be megabytes of base64 nobody asked
+     * for. The card asks for the picture by its own address instead, which
+     * is what an <img> is for and what a cache can keep. gifUtc is in the
+     * flag's place so the card's src can carry it and a replaced animation
+     * is not served from yesterday's cache. */
+    hasGif: Boolean(track.gif),
+    gifUtc: track.gifUtc || null,
   };
 }
 
@@ -327,6 +347,15 @@ class FileStore {
       key = randomBytes(16).toString('hex');
     }
     const publishedUtc = existing ? existing.publishedUtc : nowIso();
+    /* THE ANIMATION SURVIVES A RENAME AND NOT A RELAYOUT.
+     *
+     * It is a picture of a layout, so the moment the layout changes it is a
+     * picture of a track nobody can fly, and that is exactly the case the
+     * times are already cleared for. A rename, a retag or a new author
+     * leaves it alone, because none of those changes what the lap looks
+     * like and re-rendering it would cost the publisher a minute for a file
+     * identical to the one already here. */
+    const keepGif = existing && existing.layoutHash === inspected.layoutHash;
     this.data.tracks[inspected.id] = {
       id: inspected.id,
       name: inspected.name,
@@ -339,6 +368,8 @@ class FileStore {
       gates: inspected.gates,
       elements: inspected.elements,
       tags,
+      gif: keepGif ? (existing.gif || null) : null,
+      gifUtc: keepGif ? (existing.gifUtc || null) : null,
       publishedUtc,
       updatedUtc: nowIso(),
     };
@@ -354,6 +385,40 @@ class FileStore {
       updated: Boolean(existing),
       timesCleared,
     };
+  }
+
+  /*
+   * Base64 in the file store, because a JSON file cannot hold a byte array
+   * and the alternative is a second file beside it to keep in step. The SQL
+   * store keeps the bytes themselves, which is what BYTEA is for.
+   *
+   * The key is checked HERE and not in the route, for the same reason
+   * publish checks it here: the hash is a column of this table and nothing
+   * outside this file has ever been given it. `admin` is the one way past,
+   * and the route is what decides whether a request has earned it.
+   */
+  async setGif({ id, bytes, editKey = '', admin = false }) {
+    return this.lock(async () => {
+      const track = this.data.tracks[id];
+      if (!track) {
+        return null;
+      }
+      if (!admin && (!editKey || hashEditKey(editKey) !== track.editKeyHash)) {
+        return { ...NOT_YOURS };
+      }
+      track.gif = Buffer.from(bytes).toString('base64');
+      track.gifUtc = nowIso();
+      await this.flush();
+      return { id, gifUtc: track.gifUtc };
+    });
+  }
+
+  async getGif(id) {
+    const track = this.data.tracks[id];
+    if (!track || !track.gif) {
+      return null;
+    }
+    return { bytes: Buffer.from(track.gif, 'base64'), gifUtc: track.gifUtc || null };
   }
 
   async addTime({ trackId, name, lapMs, threeMs, ghost }) {
@@ -539,7 +604,17 @@ class PgStore {
   }
 
   async listTracks() {
-    const tracks = await this.pool.query('SELECT * FROM tracks ORDER BY updated_utc DESC');
+    /* Named columns rather than a star, so the animations stay in the
+     * database. A board of thirty tracks whose list carried every GIF would
+     * be megabytes of bytes no reader asked for, and a card fetches the one
+     * it wants by its own address. Everything rowToSummary reads is here,
+     * plus the flag that stands in for the bytes. */
+    const tracks = await this.pool.query(`
+      SELECT id, name, author, document, plan, has_logo, gates, elements, tags,
+             published_utc, updated_utc, gif_utc,
+             (gif IS NOT NULL) AS has_gif
+      FROM tracks ORDER BY updated_utc DESC
+    `);
     const bests = await this.pool.query(`
       SELECT DISTINCT ON (track_id) track_id, name, lap_ms
       FROM times
@@ -556,7 +631,12 @@ class PgStore {
   }
 
   async getTrack(id) {
-    const found = await this.pool.query('SELECT * FROM tracks WHERE id = $1', [id]);
+    const found = await this.pool.query(`
+      SELECT id, name, author, document, plan, has_logo, gates, elements, tags,
+             published_utc, updated_utc, gif_utc,
+             (gif IS NOT NULL) AS has_gif
+      FROM tracks WHERE id = $1
+    `, [id]);
     if (!found.rowCount) {
       return null;
     }
@@ -610,6 +690,14 @@ class PgStore {
             [inspected.id, author, row.author],
           );
         }
+        /* The animation is a picture of a layout, so a relayout throws it
+         * away for the same reason it throws the times away: it is a
+         * picture of a track nobody can fly any more. A rename or a retag
+         * keeps it, because neither changes what the lap looks like. The
+         * file store's publishUnlocked carries the same rule. */
+        if (timesCleared) {
+          await client.query('UPDATE tracks SET gif = NULL, gif_utc = NULL WHERE id = $1', [inspected.id]);
+        }
         await client.query(
           `UPDATE tracks SET
             name = $2, author = $3, document = $4, plan = $5, layout_hash = $6,
@@ -657,6 +745,32 @@ class PgStore {
     } finally {
       client.release();
     }
+  }
+
+  /* The file store's twin, and the key is checked here for the same
+   * reason: edit_key_hash is a column of this table. One statement, so the
+   * check and the write cannot be raced apart. */
+  async setGif({ id, bytes, editKey = '', admin = false }) {
+    const found = await this.pool.query('SELECT edit_key_hash FROM tracks WHERE id = $1', [id]);
+    if (!found.rowCount) {
+      return null;
+    }
+    if (!admin && (!editKey || hashEditKey(editKey) !== found.rows[0].edit_key_hash)) {
+      return { ...NOT_YOURS };
+    }
+    const done = await this.pool.query(
+      'UPDATE tracks SET gif = $2, gif_utc = NOW() WHERE id = $1 RETURNING gif_utc',
+      [id, Buffer.from(bytes)],
+    );
+    return done.rowCount ? { id, gifUtc: done.rows[0].gif_utc } : null;
+  }
+
+  async getGif(id) {
+    const found = await this.pool.query('SELECT gif, gif_utc FROM tracks WHERE id = $1', [id]);
+    if (!found.rowCount || !found.rows[0].gif) {
+      return null;
+    }
+    return { bytes: found.rows[0].gif, gifUtc: found.rows[0].gif_utc || null };
   }
 
   async addTime({ trackId, name, lapMs, threeMs, ghost }) {
@@ -947,6 +1061,11 @@ function rowToSummary(row) {
      * of "no tags" have to become the same empty list, or the page filters
      * on undefined and a card throws. */
     tags: Array.isArray(row.tags) ? row.tags : [],
+    /* The flag, never the bytes. See summaryOf, whose contract this is the
+     * other writer of. A row selected without these two columns reads as no
+     * animation, which is what the publish path's own SELECT wants. */
+    hasGif: Boolean(row.has_gif),
+    gifUtc: row.gif_utc || null,
   };
 }
 

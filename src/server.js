@@ -30,9 +30,10 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectRun, inspectTags,
-  normaliseLapMs, normaliseName, normaliseThreeMs,
-  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, RUN_MAPS, TAGS, TIME_ID_RE, TRACK_ID_RE,
+  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectRun,
+  inspectTags, normaliseLapMs, normaliseName, normaliseThreeMs,
+  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, MAX_GIF_BASE64_CHARS, RUN_MAPS, TAGS,
+  TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -57,6 +58,23 @@ const MIME = new Map([
 
 const store = await openStore();
 const bugsToken = String(process.env.BUGS_TOKEN || '');
+/*
+ * The one way to write an animation onto a track this browser did not
+ * publish. It exists because the four rooms already on the board were
+ * published from browsers nobody still has, and the alternative to a token
+ * was leaving them with an empty plan for ever. Unset means there is no
+ * such way, which is the right default: a board with no token set can only
+ * ever be written by the browser that holds a track's edit key.
+ */
+const adminToken = String(process.env.BOARD_ADMIN_TOKEN || '');
+
+function adminAuthorized(req) {
+  if (!adminToken) {
+    return false;
+  }
+  const header = String(req.headers.authorization || '');
+  return header.startsWith('Bearer ') && sameSecret(header.slice(7), adminToken);
+}
 const bugHits = new Map();
 
 /*
@@ -254,8 +272,13 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  /* The tag vocabulary rides along with the list rather than having a
+   * request of its own. It used to ride the freestyle board's request, and
+   * the page that read it no longer asks for that. One request, and the
+   * vocabulary the page offers cannot drift from the one this board
+   * accepts, because validate.js is the copy of record for both. */
   if (req.method === 'GET' && path === '/api/tracks') {
-    send(res, 200, { tracks: await store.listTracks() });
+    send(res, 200, { tracks: await store.listTracks(), tags: TAGS });
     return;
   }
 
@@ -288,6 +311,104 @@ async function handleApi(req, res, url) {
       return;
     }
     send(res, 200, payload);
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* The card animation                                                 */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * THE ONE ROUTE ON THIS BOARD THAT DOES NOT ANSWER IN JSON.
+   *
+   * It is an image, fetched by an <img> in the card grid, so it answers
+   * with the bytes and the type. Everything else about it is ordinary: the
+   * id is validated the same way, a track with no animation is a 404, and
+   * the board still renders nothing.
+   *
+   * Cached hard, and it is safe to: the card's src carries gifUtc, so a
+   * replaced animation is a different URL and an old one is never served
+   * for a new layout. This is the only response on the board that is not
+   * no-store, which is why the header is written here rather than in send.
+   */
+  const gif = path.match(/^\/api\/tracks\/([^/]+)\/gif$/);
+  if (req.method === 'GET' && gif) {
+    const id = trackIdFrom(gif[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const found = await store.getGif(id);
+    if (!found) {
+      send(res, 404, { error: 'That track has no animation.' });
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'image/gif',
+      'content-length': found.bytes.length,
+      'cache-control': 'public, max-age=31536000, immutable',
+    });
+    res.end(found.bytes);
+    return;
+  }
+
+  /*
+   * Uploading one. POST rather than PUT because the CORS grant above names
+   * GET, POST and OPTIONS, and a fourth method would widen it for one
+   * route that does nothing a POST cannot.
+   *
+   * Two ways in. The browser that published the track holds its edit key,
+   * which is how the builder uploads an animation seconds after publishing
+   * one. BOARD_ADMIN_TOKEN is the other, for the rooms published before
+   * any of this existed, and it is unset by default.
+   */
+  if (req.method === 'POST' && gif) {
+    const id = trackIdFrom(gif[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(
+        req,
+        MAX_GIF_BASE64_CHARS + 4_000,
+        'That animation is too large for this board.',
+      ));
+    } catch (e) {
+      if (e.status) {
+        throw e;
+      }
+      send(res, 400, { error: 'That upload was not readable.' });
+      return;
+    }
+    /* The class rule is read off the STORED document, not off anything the
+     * uploader said about it. See inspectGif. */
+    const held = await store.getDocument(id);
+    if (!held) {
+      send(res, 404, { error: 'That track is not on the board.' });
+      return;
+    }
+    const checked = inspectGif({ base64: body.gif, document: held.document });
+    if (checked.error) {
+      send(res, 400, { error: checked.error });
+      return;
+    }
+    const done = await store.setGif({
+      id,
+      bytes: checked.bytes,
+      editKey: typeof body.editKey === 'string' ? body.editKey : '',
+      admin: adminAuthorized(req),
+    });
+    if (!done) {
+      send(res, 404, { error: 'That track is not on the board.' });
+      return;
+    }
+    if (done.error) {
+      send(res, done.status || 400, { error: done.error });
+      return;
+    }
+    send(res, 200, { id, gifUtc: done.gifUtc, bytes: checked.bytes.length });
     return;
   }
 
