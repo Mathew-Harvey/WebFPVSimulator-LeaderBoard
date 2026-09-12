@@ -1113,6 +1113,84 @@ async function testHttp() {
       afterMove.tracks.find((t) => t.id === 'trk-2b3c4d5e').hasGif === false);
     const goneArt = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/gif');
     check('so the image is a 404 again', goneArt.status === 404);
+
+    /* ---------------------------------------------------------------- */
+    /* Taking a track off the board                                       */
+    /* ---------------------------------------------------------------- */
+
+    console.log('\ntaking a track off the board');
+
+    /* A time on it first, because the point of the route is that the times
+     * go with the track and the point of the gate is that the publisher
+     * alone may not throw somebody else's away. */
+    await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/times', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bo Kite', lapMs: 4200 }),
+    });
+    const beforeRemoval = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('the room is on the board, with a time on it',
+      beforeRemoval.tracks.find((t) => t.id === 'trk-2b3c4d5e')?.times === 1);
+
+    const noToken = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/remove', {
+      method: 'POST',
+    });
+    check('a stranger cannot remove a track', noToken.status === 403);
+
+    /* The edit key is NOT a way in, and this is the check that says so. The
+     * browser that published it can change its layout and clear the times
+     * that way; it cannot delete other pilots' records outright. */
+    const withEditKey = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/remove', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ editKey: roomKey }),
+    });
+    check('and neither can the browser that published it', withEditKey.status === 403);
+
+    /* An unauthorised caller learns nothing about which ids exist: the token
+     * is checked before the id is, so a real id and a made up one answer
+     * alike. */
+    const madeUpId = await fetch('http://127.0.0.1:3199/api/tracks/trk-00000000/remove', {
+      method: 'POST',
+    });
+    check('and an id that is not here answers the same way', madeUpId.status === 403);
+
+    const missing = await fetch('http://127.0.0.1:3199/api/tracks/trk-00000000/remove', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    check('with the token, a track that is not here is a 404', missing.status === 404);
+
+    const removed = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/remove', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const removedBody = await removed.json();
+    check('the board\'s own token takes it off',
+      removed.status === 200 && removedBody.times === 1,
+      JSON.stringify(removedBody));
+    check('and says what went, rather than echoing the id back',
+      removedBody.name === 'Ladder Loop' && removedBody.author === 'Ada Rook',
+      JSON.stringify(removedBody));
+
+    const afterRemoval = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('the list no longer carries it',
+      !afterRemoval.tracks.some((t) => t.id === 'trk-2b3c4d5e'));
+    check('and the field track beside it is untouched',
+      afterRemoval.tracks.some((t) => t.id === 'trk-1a2b3c4d'));
+    const removedOne = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e');
+    check('its detail is a 404', removedOne.status === 404);
+    const removedDoc = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/document');
+    check('and so is the document behind it', removedDoc.status === 404);
+
+    /* The id is free again, which is what makes this the way to replace a
+     * track somebody published from a browser nobody still has. */
+    const republished = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: 'Ada Rook', document: roomDoc() }),
+    });
+    check('and the id is free to publish again', republished.status === 201);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });

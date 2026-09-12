@@ -421,6 +421,42 @@ class FileStore {
     return { bytes: Buffer.from(track.gif, 'base64'), gifUtc: track.gifUtc || null };
   }
 
+  /*
+   * TAKING A TRACK OFF THE BOARD, WHICH IS THE ONE DESTRUCTIVE THING HERE.
+   *
+   * There is no edit key path and there is deliberately not one. An edit
+   * key says "this browser published this track", and that is enough to
+   * change a layout, because the people whose times it clears posted them
+   * against a layout that no longer exists. It is NOT enough to delete
+   * other pilots' times outright: a record somebody flew for is not the
+   * publisher's to throw away because they tired of their own track. So
+   * the only way in is BOARD_ADMIN_TOKEN, the same token that writes an
+   * animation onto a track this browser did not publish, and the route is
+   * what decides whether a request has earned it.
+   *
+   * The times go with it, because a time is a time ON a track and a row
+   * pointing at a track that is not here is not a record of anything. The
+   * SQL twin gets the same result from ON DELETE CASCADE. `runs` are not
+   * touched: a run is scored on a named map rather than on a published
+   * track, so no row in it points at this id.
+   *
+   * Returns the removed track's name, so the caller can say what went
+   * rather than echo an id back at whoever typed it.
+   */
+  async removeTrack(id) {
+    return this.lock(async () => {
+      const track = this.data.tracks[id];
+      if (!track) {
+        return null;
+      }
+      const times = (this.data.times[id] || []).length;
+      delete this.data.tracks[id];
+      delete this.data.times[id];
+      await this.flush();
+      return { id, name: track.name, author: track.author, times };
+    });
+  }
+
   async addTime({ trackId, name, lapMs, threeMs, ghost }) {
     return this.lock(() => this.addTimeUnlocked({ trackId, name, lapMs, threeMs, ghost }));
   }
@@ -771,6 +807,40 @@ class PgStore {
       return null;
     }
     return { bytes: found.rows[0].gif, gifUtc: found.rows[0].gif_utc || null };
+  }
+
+  /*
+   * The file store's twin, and its comment is the one that explains why
+   * there is no edit key path. One statement: the times are carried off by
+   * `times.track_id REFERENCES tracks(id) ON DELETE CASCADE` in schema.sql,
+   * and the animation is a column of the row rather than a table of its
+   * own, so it goes with it. Counted first, in the same connection, so the
+   * number reported is the number that was actually taken.
+   */
+  async removeTrack(id) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const counted = await client.query(
+        'SELECT name, author, (SELECT COUNT(*) FROM times WHERE track_id = $1) AS times FROM tracks WHERE id = $1',
+        [id],
+      );
+      if (!counted.rowCount) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await client.query('DELETE FROM tracks WHERE id = $1', [id]);
+      await client.query('COMMIT');
+      const row = counted.rows[0];
+      return {
+        id, name: row.name, author: row.author, times: Number(row.times) || 0,
+      };
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async addTime({ trackId, name, lapMs, threeMs, ghost }) {

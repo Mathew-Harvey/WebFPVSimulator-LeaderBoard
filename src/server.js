@@ -59,12 +59,16 @@ const MIME = new Map([
 const store = await openStore();
 const bugsToken = String(process.env.BUGS_TOKEN || '');
 /*
- * The one way to write an animation onto a track this browser did not
- * publish. It exists because the four rooms already on the board were
- * published from browsers nobody still has, and the alternative to a token
- * was leaving them with an empty plan for ever. Unset means there is no
- * such way, which is the right default: a board with no token set can only
- * ever be written by the browser that holds a track's edit key.
+ * The one way past an edit key, and there are now two things it opens.
+ *
+ * It exists because the rooms already on the board were published from
+ * browsers nobody still has, and the alternative to a token was leaving
+ * them with an empty plan for ever: that is the animation upload. Taking a
+ * track off the board is the other, and it has no edit key path at all.
+ *
+ * Unset means there is no way past, which is the right default: a board
+ * with no token set can only ever be written by the browser that holds a
+ * track's edit key, and nothing on it can be removed.
  */
 const adminToken = String(process.env.BOARD_ADMIN_TOKEN || '');
 
@@ -409,6 +413,47 @@ async function handleApi(req, res, url) {
       return;
     }
     send(res, 200, { id, gifUtc: done.gifUtc, bytes: checked.bytes.length });
+    return;
+  }
+
+  /*
+   * TAKING A TRACK OFF THE BOARD.
+   *
+   * POST rather than DELETE, for the same reason the upload above is a POST
+   * rather than a PUT: the CORS grant names GET, POST and OPTIONS, and a
+   * fourth method would widen it for one route that does nothing a POST
+   * cannot. Nothing in a browser calls this anyway.
+   *
+   * ADMIN ONLY, AND THE EDIT KEY IS NOT A WAY IN. See removeTrack in
+   * src/store.js for why: an edit key is enough to clear times against a
+   * layout that no longer exists, and it is not enough to delete other
+   * pilots' records outright. Unset BOARD_ADMIN_TOKEN means nothing on this
+   * board can be removed at all, which is the right default and the one
+   * every deploy has had until now.
+   *
+   * The 404 and the 403 are told apart on purpose. An unauthorised caller
+   * learns nothing about which ids exist, because adminAuthorized is checked
+   * FIRST and answers the same way whether the id is real or not.
+   */
+  const remove = path.match(/^\/api\/tracks\/([^/]+)\/remove$/);
+  if (req.method === 'POST' && remove) {
+    if (!adminAuthorized(req)) {
+      send(res, 403, { error: 'Removing a track from this board needs the board\'s own token.' });
+      return;
+    }
+    const id = trackIdFrom(remove[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const gone = await store.removeTrack(id);
+    if (!gone) {
+      send(res, 404, { error: 'That track is not on the board.' });
+      return;
+    }
+    send(res, 200, {
+      id: gone.id, name: gone.name, author: gone.author, times: gone.times,
+    });
     return;
   }
 

@@ -107,6 +107,9 @@ to create things in, is in
 | POST | `/api/tracks` | Publish `{ author, document, editKey? }` |
 | POST | `/api/tracks/:id/times` | Post `{ name, lapMs, ghost? }` |
 | GET | `/api/tracks/:id/times/:timeId/ghost` | That time's recorded lap, `{ id, name, lapMs, ghost }` |
+| GET | `/api/tracks/:id/gif` | That room's card animation, as `image/gif` |
+| POST | `/api/tracks/:id/gif` | Upload `{ gif, editKey? }`. Rooms only |
+| POST | `/api/tracks/:id/remove` | Take it off the board. `BOARD_ADMIN_TOKEN` only |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
 | POST | `/api/bugs` | Tester submit `{ kind, title, what, expected?, steps?, reporter?, context? }` |
 | GET | `/api/bugs` | Ticket summaries, newest first. `?status=open` `?kind=visual` |
@@ -117,6 +120,37 @@ A first publish returns an `editKey`. Keep it in the browser that sent
 the course. Publishing the same id again without that key is refused.
 Changing the flying layout clears the old times, because they were flown
 on a different course.
+
+## Taking a track off the board
+
+There is one way and it needs `BOARD_ADMIN_TOKEN`, set on the service and
+unset by default. An edit key is not a way in: it is enough to change a
+layout, which clears times that were flown on a layout that no longer
+exists, and it is not enough to delete other pilots' records outright.
+With the token unset, nothing on the board can be removed at all.
+
+```bash
+curl -X POST https://webfpv.org/board/api/tracks/trk-xxxxxxxx/remove \
+  -H "Authorization: Bearer $BOARD_ADMIN_TOKEN"
+```
+
+It answers with what went: `{ id, name, author, times }`. The times go
+with the track, and the id is free to publish again afterwards, which is
+what makes this the way to replace a track published from a browser
+nobody still has.
+
+## The card animation
+
+A room's card on the board is an animation of one lap of it, not a plan.
+The board renders nothing: the GIF is drawn by the browser that publishes
+the room, in `src/share/cardgif.js` in the simulator, and arrives here as
+bytes. A field track is refused one, in `inspectGif`, because a sixty
+metre course has a plan worth drawing and `public/plan.js` draws it from
+the list payload for nothing.
+
+Rooms published before any of that existed have no animation and no
+reachable edit key. The simulator's `scripts/boardgif.js` draws theirs and
+uploads them with `BOARD_ADMIN_TOKEN`.
 
 `ghost` is the simulator's recorded lap, base64 of the wire format in its
 `src/share/ghostdata.js`, attached when the lap was flown in the session
