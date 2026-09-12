@@ -7,6 +7,11 @@
  * need. Publish and post-time are the writes. Testers also POST bug
  * tickets here; agents GET them.
  *
+ * One person can sign in: an address on the whitelist in src/admin.js,
+ * which is what the Admin button on the page opens. That is the only
+ * credential this API reads, it is never a cookie, and it exists because
+ * taking a track off the board used to mean curl and a token.
+ *
  * This file is part of WebFPVLeaderboard.
  *
  * WebFPVLeaderboard is free software: you can redistribute it and/or modify
@@ -29,6 +34,9 @@ import { extname, join, normalize, dirname, relative, resolve, sep } from 'node:
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { openStore } from './store.js';
+import {
+  adminCount, checkPassword, mintSession, normaliseEmail, readSession, PASSWORD_MAX,
+} from './admin.js';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectRun,
   inspectTags, normaliseLapMs, normaliseName, normaliseThreeMs,
@@ -59,34 +67,81 @@ const MIME = new Map([
 const store = await openStore();
 const bugsToken = String(process.env.BUGS_TOKEN || '');
 /*
- * The one way past an edit key, and there are now two things it opens.
+ * A way past an edit key, and there are two things it opens.
  *
  * It exists because the rooms already on the board were published from
  * browsers nobody still has, and the alternative to a token was leaving
  * them with an empty plan for ever: that is the animation upload. Taking a
  * track off the board is the other, and it has no edit key path at all.
  *
- * Unset means there is no way past, which is the right default: a board
- * with no token set can only ever be written by the browser that holds a
- * track's edit key, and nothing on it can be removed.
+ * IT IS NO LONGER THE ONLY WAY PAST, and that changed with the admin login
+ * in src/admin.js. Unset used to mean nothing on the board could ever be
+ * removed; now it means no SCRIPT can remove anything, and a person on the
+ * whitelist still can once they have signed in. That is the point of the
+ * login, and it is written here because the old sentence was the kind
+ * somebody relies on without checking whether it is still true.
+ *
+ * It stays because a script has no browser: scripts/boardgif.js in the
+ * simulator's repository holds this and nothing else.
  */
 const adminToken = String(process.env.BOARD_ADMIN_TOKEN || '');
 
-function adminAuthorized(req) {
-  if (!adminToken) {
-    return false;
-  }
+function bearer(req) {
   const header = String(req.headers.authorization || '');
-  return header.startsWith('Bearer ') && sameSecret(header.slice(7), adminToken);
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+}
+
+/*
+ * WHO IS ASKING, and there are two kinds of admin now.
+ *
+ * BOARD_ADMIN_TOKEN is a string in an environment. It is what
+ * scripts/boardgif.js in the simulator's repository holds, and a script has
+ * no browser to sign in from, so it stays exactly as it was.
+ *
+ * A session is a PERSON: an address on the whitelist in src/admin.js that
+ * typed its password into the board's own Admin panel recently. That is the
+ * one a browser can have, and it is why the board finally has an admin
+ * screen rather than a curl command in the README.
+ *
+ * Both open the same doors. The identity is returned rather than a boolean
+ * so that anything wanting to say WHO removed a track has it to hand.
+ */
+function adminIdentity(req) {
+  const offered = bearer(req);
+  if (!offered) {
+    return null;
+  }
+  if (adminToken && sameSecret(offered, adminToken)) {
+    return { kind: 'token', email: '' };
+  }
+  const session = readSession(offered);
+  return session ? { kind: 'session', email: session.email, expiresUtc: session.expiresUtc } : null;
+}
+
+function adminAuthorized(req) {
+  return Boolean(adminIdentity(req));
 }
 const bugHits = new Map();
 
 /*
- * The board is public and every response is credential free: there is no
- * cookie, no Authorization header and no session. Reflecting the request
- * origin is therefore the same grant as '*', and it is written this way so
- * that adding credentials later fails closed rather than silently sharing
- * them with whoever asked.
+ * The board is public and no response here is AMBIENTLY authenticated:
+ * there is no cookie, no session cookie and no HTTP auth realm, and
+ * access-control-allow-credentials is never sent. Reflecting the request
+ * origin is therefore still the same grant as '*', which is the invariant
+ * this function exists to keep.
+ *
+ * The admin login does not change that, and the reason is worth writing
+ * down. Its token lives in the board page's own sessionStorage and is
+ * attached by that page's script, by hand, to the requests that need it. A
+ * browser never sends it on anybody else's behalf. So another site's script
+ * calling this API gets exactly what curl gets, which is an unauthenticated
+ * request, and the reflected origin hands it nothing it did not already
+ * have.
+ *
+ * What would break the invariant is a cookie, so do not add one. The moment
+ * a credential is sent by the browser rather than by the page, reflecting
+ * the origin becomes a standing grant to every site on the internet, and
+ * this header has to name one origin instead.
  */
 function cors(req, res) {
   const origin = req.headers.origin || '*';
@@ -167,10 +222,15 @@ function bugsAuthorized(req, url) {
   if (!bugsToken) {
     return true;
   }
-  const header = String(req.headers.authorization || '');
-  const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
+  /* An admin of the board reads the inbox without a second secret. Somebody
+   * trusted to take a track off the board is trusted to read a bug ticket,
+   * and making them hold two strings to do one job is how one of the two
+   * ends up written down somewhere it should not be. */
+  if (adminAuthorized(req)) {
+    return true;
+  }
   const query = url.searchParams.get('token') || '';
-  return sameSecret(bearer, bugsToken) || sameSecret(query, bugsToken);
+  return sameSecret(bearer(req), bugsToken) || sameSecret(query, bugsToken);
 }
 
 function clientIp(req) {
@@ -272,6 +332,95 @@ async function handleApi(req, res, url) {
     send(res, 200, {
       simOrigin,
       boardOrigin: requestOrigin(req),
+    });
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Signing in                                                         */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * THE ONE ROUTE ON THIS BOARD THAT READS A PASSWORD.
+   *
+   * An address off the whitelist in src/admin.js, its password, and a
+   * signed token back. The token is what the Admin panel on the board's own
+   * page then sends on the admin routes, and it expires on its own.
+   *
+   * ONE MESSAGE FOR EVERY FAILURE, deliberately. A wrong password, an
+   * address that is not an admin and an address that is not an address all
+   * answer the same sentence, so this route cannot be asked which addresses
+   * are worth attacking. checkPassword runs scrypt against a decoy record
+   * for an unknown address for the same reason, so the answers take about
+   * the same time as well as saying the same thing.
+   *
+   * Rate limited on the same gate the bug form and the freestyle board use,
+   * and recorded only on a FAILURE: an admin signing in twice in a morning
+   * is not spending an allowance, and somebody working through a word list
+   * is. Process local, so it is a speed bump rather than a guarantee; what
+   * does the real work is scrypt, which makes each guess cost tens of
+   * milliseconds whether it is made here or offline.
+   */
+  if (req.method === 'POST' && path === '/api/admin/login') {
+    const ip = clientIp(req);
+    if (bugFlooded(`admin:${ip}`)) {
+      send(res, 429, { error: 'Too many sign in attempts from here. Try again in a few minutes.' });
+      return;
+    }
+    if (!adminCount()) {
+      send(res, 503, { error: 'This board has no admin accounts.' });
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, 4_000, 'That sign in was too large.'));
+    } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
+      send(res, 400, { error: 'That request was not JSON.' });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      send(res, 400, { error: 'That request was not a JSON object.' });
+      return;
+    }
+    const email = normaliseEmail(body.email);
+    const password = typeof body.password === 'string' ? body.password : '';
+    const who = (email && password && password.length <= PASSWORD_MAX)
+      ? checkPassword(email, password)
+      : null;
+    if (!who) {
+      recordBugHit(`admin:${ip}`);
+      send(res, 401, { error: 'That email and password do not open this board.' });
+      return;
+    }
+    const token = mintSession(who);
+    const session = readSession(token);
+    send(res, 200, { token, email: who, expiresUtc: session ? session.expiresUtc : null });
+    return;
+  }
+
+  /*
+   * Who the caller is, if anybody. The Admin panel asks this on load, with
+   * the token it kept in sessionStorage, so a reload does not cost a second
+   * sign in and a token that has expired or been revoked is found out
+   * quietly rather than at the moment somebody tries to remove a track.
+   *
+   * It answers for BOARD_ADMIN_TOKEN too, with no address, because that
+   * identity is a string rather than a person and the panel has something
+   * honest to print either way.
+   */
+  if (req.method === 'GET' && path === '/api/admin/session') {
+    const who = adminIdentity(req);
+    if (!who) {
+      send(res, 401, { error: 'Not signed in.' });
+      return;
+    }
+    send(res, 200, {
+      email: who.email,
+      kind: who.kind,
+      expiresUtc: who.expiresUtc || null,
     });
     return;
   }
@@ -427,9 +576,9 @@ async function handleApi(req, res, url) {
    * ADMIN ONLY, AND THE EDIT KEY IS NOT A WAY IN. See removeTrack in
    * src/store.js for why: an edit key is enough to clear times against a
    * layout that no longer exists, and it is not enough to delete other
-   * pilots' records outright. Unset BOARD_ADMIN_TOKEN means nothing on this
-   * board can be removed at all, which is the right default and the one
-   * every deploy has had until now.
+   * pilots' records outright. Admin means BOARD_ADMIN_TOKEN or a signed in
+   * address off the whitelist in src/admin.js, which is what the Admin
+   * panel on the board's own page holds.
    *
    * The 404 and the 403 are told apart on purpose. An unauthorised caller
    * learns nothing about which ids exist, because adminAuthorized is checked
@@ -437,8 +586,9 @@ async function handleApi(req, res, url) {
    */
   const remove = path.match(/^\/api\/tracks\/([^/]+)\/remove$/);
   if (req.method === 'POST' && remove) {
-    if (!adminAuthorized(req)) {
-      send(res, 403, { error: 'Removing a track from this board needs the board\'s own token.' });
+    const who = adminIdentity(req);
+    if (!who) {
+      send(res, 403, { error: 'Removing a track from this board needs an admin.' });
       return;
     }
     const id = trackIdFrom(remove[1]);
@@ -451,6 +601,13 @@ async function handleApi(req, res, url) {
       send(res, 404, { error: 'That track is not on the board.' });
       return;
     }
+    /*
+     * The only line this server logs about a write, because it is the only
+     * write that destroys somebody else's work: a track, and every time
+     * flown on it, gone with no undo. A host's log is the only record that
+     * it happened and who did it, so it says both.
+     */
+    console.log(`removed ${gone.id} "${gone.name}" by ${gone.author}, ${gone.times} time(s), by ${who.email || 'BOARD_ADMIN_TOKEN'}`);
     send(res, 200, {
       id: gone.id, name: gone.name, author: gone.author, times: gone.times,
     });

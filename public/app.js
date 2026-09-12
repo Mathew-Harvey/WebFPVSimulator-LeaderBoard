@@ -180,6 +180,38 @@ function formatAgo(iso) {
   return formatWhen(iso);
 }
 
+/*
+ * A moment a few hours away, which is the only thing on this page that
+ * wants a clock. formatWhen prints a date, which is right for a track
+ * published in March and useless for a sign in that runs out this evening:
+ * "runs out Sep 12" on the twelfth of September says nothing at all. So
+ * today gets a time, tomorrow gets a day and a time, and anything further
+ * out falls back on the date, which is what the server's twelve hours can
+ * never actually reach.
+ */
+function formatUntil(iso) {
+  if (!iso) {
+    return '';
+  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return '';
+  }
+  const clock = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const now = new Date();
+  const days = Math.round(
+    (new Date(d.getFullYear(), d.getMonth(), d.getDate())
+      - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000,
+  );
+  if (days <= 0) {
+    return `at ${clock}`;
+  }
+  if (days === 1) {
+    return `tomorrow at ${clock}`;
+  }
+  return `${formatWhen(iso)} at ${clock}`;
+}
+
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -1152,6 +1184,360 @@ function paintCraftCounts() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Admin                                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * SIGNING IN, AND WHERE THE TOKEN LIVES.
+ *
+ * sessionStorage, not localStorage and not a cookie, and each of those is
+ * a decision rather than a default.
+ *
+ * Not a cookie, because a cookie is sent by the browser rather than by this
+ * page, and the board reflects whatever origin asks it. See cors() in
+ * src/server.js: the moment a credential travels on the browser's own
+ * initiative, reflecting the origin becomes a standing grant to every site
+ * on the internet. A token this page attaches by hand is reachable only by
+ * script on this origin, so the reflection stays as harmless as it was.
+ *
+ * sessionStorage rather than localStorage because this is an admin
+ * credential and the tab closing is a perfectly good moment to lose it. The
+ * server gives it twelve hours anyway; whichever runs out first wins.
+ */
+const ADMIN_KEY = 'webfpv.board.admin.v1';
+
+const admin = { token: '', email: '', kind: '', expiresUtc: '' };
+
+function readAdminToken() {
+  try {
+    return sessionStorage.getItem(ADMIN_KEY) || '';
+  } catch (e) {
+    /* Storage refused, which is a private window or a locked down browser.
+     * Signing in still works for as long as this page is open; it just does
+     * not survive a reload. */
+    return '';
+  }
+}
+
+function writeAdminToken(token) {
+  try {
+    if (token) {
+      sessionStorage.setItem(ADMIN_KEY, token);
+    } else {
+      sessionStorage.removeItem(ADMIN_KEY);
+    }
+  } catch (e) {
+    /* As above. The in-memory copy is what the requests use. */
+  }
+}
+
+function signedIn() {
+  return Boolean(admin.token);
+}
+
+/* The one place an admin request is built, so nothing else has to remember
+ * to attach the token or to notice that the board stopped believing it. */
+async function adminFetch(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (admin.token) {
+    headers.authorization = `Bearer ${admin.token}`;
+  }
+  const r = await fetch(here(path), { ...options, headers });
+  const body = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) {
+    /*
+     * The board no longer believes the token: it expired, the whitelist
+     * changed, or a password was changed, which invalidates every session
+     * it minted. Drop it here rather than letting the next request fail the
+     * same way, so the page goes back to its signed out face immediately
+     * and the panel is honest about what it can do.
+     */
+    forgetAdmin();
+    const err = new Error(body.error || 'That sign in is no longer good. Sign in again.');
+    err.signedOut = true;
+    throw err;
+  }
+  if (!r.ok) {
+    throw new Error(body.error || `The board answered ${r.status}.`);
+  }
+  return body;
+}
+
+function forgetAdmin() {
+  admin.token = '';
+  admin.email = '';
+  admin.kind = '';
+  admin.expiresUtc = '';
+  writeAdminToken('');
+  paintAdmin();
+}
+
+function paintAdminButton() {
+  const btn = byId('admin-open');
+  if (!btn) {
+    return;
+  }
+  btn.classList.toggle('is-on', signedIn());
+  /* The address, not the word "Admin", once somebody is signed in: a board
+   * that can delete a track should say whose hands are on it, and the local
+   * part is enough to recognise yourself by without printing an email
+   * address across the masthead. */
+  btn.textContent = signedIn() ? (admin.email.split('@')[0] || 'Signed in') : 'Admin';
+  btn.setAttribute('aria-label', signedIn() ? `Admin, signed in as ${admin.email || 'this board\'s token'}` : 'Admin');
+}
+
+/* The panel's two faces, and the track sheet's control, all follow from one
+ * fact, so they are painted together and never separately. */
+function paintAdmin() {
+  paintAdminButton();
+  const form = byId('admin-signin');
+  const signed = byId('admin-signed');
+  if (form) {
+    form.hidden = signedIn();
+  }
+  if (signed) {
+    signed.hidden = !signedIn();
+  }
+  const who = byId('admin-who');
+  if (who) {
+    who.textContent = admin.email || 'this board\'s own token';
+  }
+  const until = byId('admin-until');
+  if (until) {
+    const when = formatUntil(admin.expiresUtc);
+    until.textContent = when
+      ? `This sign in runs out ${when}, and closing this tab ends it sooner.`
+      : 'Closing this tab ends this sign in.';
+  }
+  const track = state.openId ? courseById(state.openId) : null;
+  if (track) {
+    paintSheetAdmin(track);
+  } else {
+    const host = byId('sheet-admin');
+    if (host) {
+      host.hidden = true;
+      host.textContent = '';
+    }
+  }
+}
+
+function adminError(message) {
+  const box = byId('admin-error');
+  if (box) {
+    box.textContent = message || '';
+  }
+}
+
+async function signIn(email, password) {
+  const body = await adminFetch('api/admin/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  admin.token = body.token || '';
+  admin.email = body.email || '';
+  admin.kind = 'session';
+  admin.expiresUtc = body.expiresUtc || '';
+  writeAdminToken(admin.token);
+  paintAdmin();
+}
+
+/*
+ * A token kept from before the reload, checked rather than trusted.
+ *
+ * The board is the only thing that knows whether it is still good, and the
+ * cost of asking is one request that happens on a page load nobody is
+ * watching. The alternative is a masthead that says somebody is signed in
+ * until the moment they press the one button that matters.
+ */
+async function restoreAdmin() {
+  const token = readAdminToken();
+  if (!token) {
+    paintAdmin();
+    return;
+  }
+  admin.token = token;
+  try {
+    const body = await adminFetch('api/admin/session');
+    admin.email = body.email || '';
+    admin.kind = body.kind || 'session';
+    admin.expiresUtc = body.expiresUtc || '';
+    paintAdmin();
+  } catch (e) {
+    /* adminFetch has already dropped it and repainted if the board said no.
+     * A board that is simply down leaves the token alone: it may be good
+     * again in a minute, and nothing on the page acts on it meanwhile. */
+    if (!e.signedOut) {
+      paintAdmin();
+    }
+  }
+}
+
+/*
+ * THE ONE CONTROL THAT DESTROYS SOMETHING.
+ *
+ * Two presses, and the second one is a different colour and says what it is
+ * about to take. Not window.confirm, for two reasons: it cannot say how
+ * many times are about to go with the track, and a browser dialog is the
+ * thing people dismiss without reading because almost every one they have
+ * ever seen was worth dismissing.
+ *
+ * It disarms itself after a few seconds, so a panel left open on a desk
+ * does not have a loaded button in it.
+ */
+function paintSheetAdmin(track) {
+  const host = byId('sheet-admin');
+  if (!host) {
+    return;
+  }
+  host.textContent = '';
+  host.hidden = !signedIn();
+  if (!signedIn()) {
+    return;
+  }
+  host.append(el('div', 'kicker', 'Admin'));
+  const held = track.times || 0;
+  host.append(el('p', null, held
+    ? `Taking this off the board takes ${plural(held, 'posted time', 'posted times')} with it. There is no undo.`
+    : 'Taking this off the board cannot be undone. The id becomes free to publish again.'));
+
+  const btn = el('button', 'btn danger small', 'Take off the board');
+  btn.type = 'button';
+  let armed = 0;
+  const disarm = () => {
+    clearTimeout(armed);
+    armed = 0;
+    btn.classList.remove('armed');
+    btn.textContent = 'Take off the board';
+  };
+  btn.addEventListener('click', async () => {
+    if (!armed) {
+      btn.classList.add('armed');
+      btn.textContent = `Remove ${track.name}, for good`;
+      armed = setTimeout(disarm, 6000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = 0;
+    btn.disabled = true;
+    btn.textContent = 'Removing';
+    try {
+      await adminFetch(`api/tracks/${encodeURIComponent(track.id)}/remove`, { method: 'POST' });
+      dropTrack(track.id);
+    } catch (e) {
+      btn.disabled = false;
+      disarm();
+      host.append(el('p', 'admin-error', e.message));
+    }
+  });
+  host.append(btn);
+}
+
+/*
+ * What the page does about a track that is no longer there: forget it, put
+ * the reader back on the grid, and repaint everything that counted it. The
+ * alternative is a reload, which throws away the search and the tag filter
+ * somebody had set to find the track they just removed.
+ */
+function dropTrack(id) {
+  state.courses = state.courses.filter((t) => t.id !== id);
+  state.timesById.delete(id);
+  paintStats();
+  paintCraftCounts();
+  paintAuthors();
+  paintTags();
+  paintGrid();
+  paintRail();
+  /* clearHash routes back to the grid and returns focus to whatever opened
+   * the sheet, which is the card that no longer exists; route() closing the
+   * sheet is what matters and a missing focus target is handled there. */
+  clearHash();
+}
+
+function bindAdmin() {
+  const open = byId('admin-open');
+  const close = byId('admin-close');
+  const form = byId('admin-signin');
+  const out = byId('admin-signout');
+  if (open) {
+    open.addEventListener('click', () => {
+      adminError('');
+      openSheet(byId('admin-sheet'));
+      paintAdmin();
+      /* Straight into the field, because somebody who pressed Admin is
+       * here to type. Only when there is something to type into. */
+      const field = byId('admin-email');
+      if (field && !byId('admin-signin').hidden) {
+        field.focus();
+      }
+    });
+  }
+  if (close) {
+    close.addEventListener('click', closeAdmin);
+  }
+  if (out) {
+    out.addEventListener('click', () => {
+      forgetAdmin();
+      closeAdmin();
+    });
+  }
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = byId('admin-email');
+      const password = byId('admin-password');
+      const submit = byId('admin-submit');
+      const busy = byId('admin-busy');
+      adminError('');
+      submit.disabled = true;
+      if (busy) {
+        busy.hidden = false;
+      }
+      try {
+        await signIn(email.value, password.value);
+        /* The password does not stay in the DOM a moment longer than the
+         * request needs it. */
+        password.value = '';
+      } catch (err) {
+        adminError(err.message);
+        password.select();
+      } finally {
+        submit.disabled = false;
+        if (busy) {
+          busy.hidden = true;
+        }
+      }
+    });
+  }
+}
+
+/*
+ * Closing the panel goes back through route(), so a track sheet that was
+ * open behind it comes back rather than the reader being dropped on the
+ * grid. The admin panel has no hash of its own, which is why this is not
+ * clearHash.
+ */
+function closeAdmin() {
+  const panel = byId('admin-sheet');
+  if (!panel || panel.hidden) {
+    return;
+  }
+  panel.hidden = true;
+  document.body.classList.remove('locked');
+  setPageInert(false);
+  route();
+  const back = state.lastFocus;
+  if (back && document.contains(back) && !byId('admin-sheet').contains(back)) {
+    back.focus();
+  } else {
+    const open = byId('admin-open');
+    if (open) {
+      open.focus();
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* The track sheet                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1353,6 +1739,8 @@ async function paintSheet(track) {
   remix.target = SIM_WINDOW;
   actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${courseHref(track.id)}`));
 
+  paintSheetAdmin(track);
+
   const held = timesFor(track.id) || [];
   paintHero(byId('sheet-hero'), track, held);
   paintBoard(byId('sheet-board'), track, held);
@@ -1382,11 +1770,14 @@ function setPageInert(on) {
 }
 
 function sheetOpen() {
-  return !byId('sheet').hidden || !byId('credits-sheet').hidden;
+  return !byId('sheet').hidden || !byId('credits-sheet').hidden || !byId('admin-sheet').hidden;
 }
 
 function closeSheets() {
-  for (const id of ['sheet', 'credits-sheet']) {
+  /* The admin panel is in this list so that opening a track over it closes
+   * it, rather than the two stacking. It is NOT opened by route(), which is
+   * the difference between it and the other two: see closeAdmin. */
+  for (const id of ['sheet', 'credits-sheet', 'admin-sheet']) {
     const node = byId(id);
     if (!node.hidden) {
       node.hidden = true;
@@ -1622,6 +2013,13 @@ function watchOrbit() {
 function watchKeys() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      /* The admin panel first, and by its own path: it is the one dialog
+       * with no address, so clearing a hash would close whatever is behind
+       * it and leave the panel standing. */
+      if (!byId('admin-sheet').hidden) {
+        closeAdmin();
+        return;
+      }
       if (location.hash) {
         clearHash();
       }
@@ -1671,6 +2069,17 @@ async function start() {
   watchKeys();
   watchResize();
   bindCredits();
+  /*
+   * BEFORE THE REQUESTS, and before the two early returns below it.
+   *
+   * The Admin button has to work on a board that is empty and on a board
+   * whose list request failed, which are exactly the two states somebody
+   * signs in to do something about. Binding it after the fetches would
+   * leave a dead button on both. restoreAdmin is deliberately not awaited:
+   * it is one request nobody is waiting for, and the tracks matter more.
+   */
+  bindAdmin();
+  restoreAdmin();
 
   const list = byId('list');
   const notice = byId('notice');

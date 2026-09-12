@@ -20,6 +20,9 @@ import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
   normaliseThreeMs, planFromDocument, trackClassOf,
 } from './validate.js';
+import {
+  adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
+} from './admin.js';
 import { openStore } from './store.js';
 import { guessSimOrigin, isLoopback } from '../public/origins.js';
 
@@ -59,6 +62,28 @@ const GIF_64 = Buffer.concat([
  * admin path are exercised: it opens the door, and an unset one has no
  * door at all. */
 const ADMIN_TOKEN = 'selftest-admin-token';
+
+/*
+ * THE ADMIN THE HTTP HALF SIGNS IN AS, AND WHY IT IS NOT THE REAL ONE.
+ *
+ * The board ships with one address on its whitelist and the password behind
+ * an scrypt hash, so the word itself is not in this repository. Writing it
+ * into a test file would put it back, in plaintext, in the one file
+ * everybody reads. So the http half starts its server with BOARD_ADMINS set
+ * to this instead: a made up address, a made up password, and the whole
+ * login path exercised end to end against them.
+ *
+ * What that leaves uncovered is whether the SHIPPED hash matches the
+ * password somebody was given for it, which no test in a public repository
+ * can check without publishing that password. Set BOARD_SELFTEST_PASSWORD
+ * to check it on a machine where knowing it is fine; the unit half below
+ * uses it when it is there and says so when it is not.
+ *
+ * `plain:` is also the one thing in src/admin.js that nothing else would
+ * exercise, so this doubles as its check.
+ */
+const ADMIN_EMAIL = 'boardkeeper@example.com';
+const ADMIN_PASSWORD = 'selftest-password-42';
 
 function roomDoc(id = 'trk-2b3c4d5e') {
   const room = sampleDoc(id, {
@@ -587,6 +612,7 @@ async function testHttp() {
       DATABASE_URL: '',
       SIM_ORIGIN: 'http://127.0.0.1:8000',
       BOARD_ADMIN_TOKEN: ADMIN_TOKEN,
+      BOARD_ADMINS: `${ADMIN_EMAIL}:plain:${ADMIN_PASSWORD}`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -1191,6 +1217,96 @@ async function testHttp() {
       body: JSON.stringify({ author: 'Ada Rook', document: roomDoc() }),
     });
     check('and the id is free to publish again', republished.status === 201);
+
+    /* ------------------------------------------------------------------ */
+    console.log('\nsigning in');
+
+    /* The server under test was started with BOARD_ADMINS naming one made
+     * up address, which REPLACES the built-in list rather than adding to
+     * it. A host that sets its own admins does not silently keep the one
+     * whose password is published, and this is the check that says so. */
+    const shipped = await fetch('http://127.0.0.1:3199/api/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'mathewharvey@gmail.com', password: 'anything at all' }),
+    });
+    check('BOARD_ADMINS replaces the built-in list rather than adding to it',
+      shipped.status === 401);
+
+    const wrongPassword = await fetch('http://127.0.0.1:3199/api/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: ADMIN_EMAIL, password: 'not it' }),
+    });
+    const wrongBody = await wrongPassword.json();
+    check('a wrong password is refused', wrongPassword.status === 401);
+
+    const stranger = await fetch('http://127.0.0.1:3199/api/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'nobody@example.com', password: ADMIN_PASSWORD }),
+    });
+    const strangerBody = await stranger.json();
+    check('an address that is not on the list is refused', stranger.status === 401);
+    /* The same sentence for both, so the route cannot be asked which
+     * addresses are worth attacking. */
+    check('and the two refusals say exactly the same thing',
+      wrongBody.error === strangerBody.error, `${wrongBody.error} / ${strangerBody.error}`);
+
+    const noSession = await fetch('http://127.0.0.1:3199/api/admin/session');
+    check('with no token, the session route says nobody', noSession.status === 401);
+
+    const signedIn = await fetch('http://127.0.0.1:3199/api/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      /* Mixed case and a stray space, the way a person types their own
+       * address into a form. */
+      body: JSON.stringify({ email: `  ${ADMIN_EMAIL.toUpperCase()} `, password: ADMIN_PASSWORD }),
+    });
+    const session = await signedIn.json();
+    check('the right address and password sign in',
+      signedIn.status === 200 && typeof session.token === 'string' && session.token.length > 40,
+      JSON.stringify({ status: signedIn.status, error: session.error }));
+    check('and the address comes back normalised', session.email === ADMIN_EMAIL);
+    check('with a time it runs out', typeof session.expiresUtc === 'string' && session.expiresUtc.endsWith('Z'));
+
+    const who = await fetch('http://127.0.0.1:3199/api/admin/session', {
+      headers: { authorization: `Bearer ${session.token}` },
+    }).then((r) => r.json());
+    check('the session route reads the token back', who.email === ADMIN_EMAIL && who.kind === 'session');
+
+    const asToken = await fetch('http://127.0.0.1:3199/api/admin/session', {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    }).then((r) => r.json());
+    check('and answers for BOARD_ADMIN_TOKEN with no address',
+      asToken.kind === 'token' && asToken.email === '');
+
+    const tampered = await fetch('http://127.0.0.1:3199/api/admin/session', {
+      headers: { authorization: `Bearer ${session.token.slice(0, -3)}zzz` },
+    });
+    check('a token with the signature changed is nobody', tampered.status === 401);
+
+    /*
+     * The point of all of it: a signed in person can do the thing that used
+     * to need a string in an environment. The track republished above is
+     * the one that goes.
+     */
+    const bySession = await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/remove', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    check('a signed in admin takes a track off the board', bySession.status === 200);
+    const afterSession = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('and it is gone', !afterSession.tracks.some((t) => t.id === 'trk-2b3c4d5e'));
+
+    /* The bugs inbox opens to an admin without a second secret. This server
+     * runs with BUGS_TOKEN unset, so the useful half of that is the shape of
+     * the answer rather than the gate; the gate itself is checked in the
+     * unit half, where bugsAuthorized's two callers are one function. */
+    const inboxByAdmin = await fetch('http://127.0.0.1:3199/api/bugs', {
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    check('and reads the bugs inbox with the same token', inboxByAdmin.status === 200);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });
@@ -1243,7 +1359,74 @@ function testOrigins() {
       && !isLoopback('webfpv.org'));
 }
 
+/*
+ * The whitelist, the password check and the session token, without a server.
+ *
+ * This half runs with BOARD_ADMINS unset, so what it sees is the list the
+ * repository SHIPS. That is deliberate: the one thing worth checking about
+ * a built-in whitelist is that it is the addresses somebody meant and not
+ * one more.
+ */
+function testAdmin() {
+  console.log('\nadmin');
+
+  check('the board ships exactly one admin address',
+    adminEmails().length === 1, adminEmails().join(', '));
+  check('and it is the one intended',
+    adminEmails()[0] === 'mathewharvey@gmail.com', adminEmails()[0]);
+
+  check('an address is lowercased and trimmed',
+    normaliseEmail('  Someone@Example.COM ') === 'someone@example.com');
+  check('and something that is not an address is nothing',
+    normaliseEmail('not an address') === '' && normaliseEmail('a@b') === ''
+      && normaliseEmail(null) === '' && normaliseEmail('x:y@example.com') === '');
+
+  check('a wrong password does not open the shipped entry',
+    checkPassword('mathewharvey@gmail.com', 'Bongos4you') === null);
+  check('an empty password does not open it either',
+    checkPassword('mathewharvey@gmail.com', '') === null);
+  check('an address that is not on the list is refused whatever it brings',
+    checkPassword('stranger@example.com', 'Bongos4u') === null);
+
+  /*
+   * The password behind the shipped hash is not in this repository, so the
+   * only machine that can check it is one where somebody has been told it.
+   * Unset, this says so rather than passing quietly, because a test that
+   * silently checks nothing is worse than one that is honestly absent.
+   */
+  const given = process.env.BOARD_SELFTEST_PASSWORD || '';
+  if (given) {
+    check('the shipped hash opens with the password given for it',
+      checkPassword('mathewharvey@gmail.com', given) === 'mathewharvey@gmail.com');
+  } else {
+    console.log('  skip  the shipped hash against its own password. Set BOARD_SELFTEST_PASSWORD to check it.');
+  }
+
+  const token = mintSession('mathewharvey@gmail.com');
+  const read = readSession(token);
+  check('a session token reads back as the address that minted it',
+    read && read.email === 'mathewharvey@gmail.com');
+  check('and carries when it runs out',
+    read && typeof read.expiresUtc === 'string' && read.expiresUtc.endsWith('Z'));
+
+  check('a token with its signature changed is nobody',
+    readSession(`${token.slice(0, -2)}zz`) === null);
+  check('a token with its payload changed is nobody',
+    readSession(`v1.${Buffer.from(JSON.stringify({ e: 'mathewharvey@gmail.com', x: Date.now() + 9e6 })).toString('base64url')}.${token.split('.')[2]}`) === null);
+  check('an expired token is nobody',
+    readSession(mintSession('mathewharvey@gmail.com', { ms: -1000 })) === null);
+  /* The whitelist is checked on every read, not only at sign in, so an
+   * address taken out of BOARD_ADMINS is locked out at once rather than
+   * when its token happens to run out. */
+  check('a token for an address that is not on the list is nobody',
+    readSession(mintSession('gone@example.com')) === null);
+  check('junk is nobody',
+    readSession('') === null && readSession('v1.a.b') === null
+      && readSession(null) === null && readSession('v2.a.b') === null);
+}
+
 testOrigins();
+testAdmin();
 await testValidate();
 await testStore();
 await testHttp();

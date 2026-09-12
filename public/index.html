@@ -1068,6 +1068,148 @@
       tr.r1 .gap-bar span { background: var(--mint); }
 
       /* ---------------------------------------------------------------
+         Admin. The button in the masthead, the sign in panel behind it,
+         and the one destructive control it puts in the track sheet.
+
+         Amber throughout, which on this page is the instrument colour:
+         not mint, which means a record, and not sakura, which is chrome.
+         An admin control is an instrument. The one exception is the
+         removal button, which goes red on the second press, because at
+         that point it is the only red thing on the board and it is about
+         to destroy somebody's track.
+         --------------------------------------------------------------- */
+      .admin-open.is-on {
+        color: var(--amber);
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .admin-open.is-on:hover { color: var(--amber); filter: brightness(1.12); }
+      .admin-open.is-on::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--amber);
+      }
+
+      .admin-inner { max-width: 640px; }
+      .admin-panel {
+        padding: 20px 22px 22px;
+        display: grid;
+        gap: 14px;
+      }
+      /* The panel sets `display`, and a class that sets display beats the
+         browser's own `[hidden] { display: none }`. Without this line both
+         faces of the panel are drawn at once, which is exactly what the
+         first look at this screen showed: a sign in form with a "signed in
+         as" block under it. */
+      .admin-panel[hidden] { display: none; }
+      .admin-lede {
+        margin: 0;
+        color: var(--slate);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .admin-field { display: grid; gap: 6px; }
+      .admin-field label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+      }
+      .admin-field input {
+        background: var(--field);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        color: var(--cream);
+        font: 15px/1.3 var(--ui);
+        padding: 10px 12px;
+        width: 100%;
+      }
+      .admin-field input:focus { outline: none; border-color: var(--sakura); }
+      .admin-field input:focus-visible { outline: 2px solid var(--sakura); outline-offset: 2px; }
+      .admin-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .admin-busy {
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--slate);
+      }
+      .admin-busy[hidden] { display: none; }
+      /* Empty until there is something to say, and no reserved line: a
+         panel with a blank row under the button looks broken. */
+      .admin-error {
+        margin: 0;
+        color: #ff8f8f;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .admin-error:empty { display: none; }
+      .admin-who { margin: 0; font-size: 15px; }
+      .admin-who b { color: var(--amber); font-weight: 600; }
+      .admin-can {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--slate);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .admin-can a { color: var(--sakura); }
+      .admin-warn {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 3px;
+        background: var(--sunk);
+        box-shadow: inset 0 0 0 1px var(--line);
+        color: var(--amber);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* The strip inside the track sheet. Ruled off from the Fly row above
+         it, because the two are not the same kind of thing and a reader
+         reaching for Fly should not find a delete. */
+      .admin-tools {
+        margin-top: 22px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+        justify-items: start;
+      }
+      .admin-tools[hidden] { display: none; }
+      .admin-tools .kicker { color: var(--amber); }
+      .admin-tools p {
+        margin: 0;
+        color: var(--slate);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      button.btn.danger {
+        border-color: rgba(255, 143, 143, 0.55);
+        color: #ff8f8f;
+      }
+      button.btn.danger:hover {
+        background: rgba(255, 143, 143, 0.1);
+        border-color: #ff8f8f;
+        color: #ff8f8f;
+      }
+      button.btn.danger.armed {
+        background: #ff8f8f;
+        border-color: #ff8f8f;
+        color: var(--deep);
+        font-weight: 700;
+      }
+      button.btn.danger.armed:hover { background: #ff8f8f; color: var(--deep); }
+
+      /* ---------------------------------------------------------------
          Credits sheet. Same shell as the track sheet, and the same roll
          the simulator serves at #credits: sections ruled like a printed
          page, the beta roll a start list with a slot number under each
@@ -1652,6 +1794,21 @@
           <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
           <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
           <a class="text" id="mast-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+          <!--
+            ADMIN, AND IT IS THE QUIETEST THING IN THE MASTHEAD ON PURPOSE.
+
+            It is for the two or three people who look after the board and
+            it sits beside three links every visitor wants, so it wears the
+            plain text treatment rather than a button's border. A visitor
+            who presses it is told, in one sentence, that this is a short
+            list of addresses and theirs is not on it.
+
+            It goes mint once somebody is signed in, because from that
+            moment the track sheet has a control in it that destroys work,
+            and a page that can do that should say so where it can be seen
+            from anywhere on it.
+          -->
+          <button type="button" class="text admin-open" id="admin-open" aria-haspopup="dialog">Admin</button>
         </nav>
       </div>
     </header>
@@ -1786,10 +1943,85 @@
             <div class="shot" id="sheet-shot"></div>
             <dl class="facts" id="sheet-facts"></dl>
             <div class="actions" id="sheet-actions"></div>
+            <!-- Empty and hidden until somebody is signed in. app.js fills
+                 it; see paintSheetAdmin there for why the confirm is a
+                 second press rather than a browser dialog. -->
+            <div class="admin-tools" id="sheet-admin" hidden></div>
           </div>
           <div class="sheet-times">
             <div class="hero panel" id="sheet-hero"></div>
             <div id="sheet-board"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      THE ADMIN PANEL.
+
+      A dialog rather than a page, and no address of its own: an admin
+      screen is not a thing to link to, and a #admin hash would be a link
+      somebody could send a stranger to a login form. It is the only sheet
+      here that is not routed by the hash for that reason, so app.js opens
+      and closes it directly and Escape is wired to it by hand.
+
+      Two states in the markup rather than one built in script, because a
+      real <form> with real labels and real autocomplete attributes is what
+      a password manager fills and what a screen reader reads. The form
+      posts nothing on its own: app.js takes the submit, asks the board, and
+      keeps the token it gets back in sessionStorage, which is this tab and
+      this tab only. Closing the tab signs out.
+    -->
+    <div id="admin-sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="admin-title">
+      <div class="chequer" aria-hidden="true"></div>
+      <div class="sheet-inner admin-inner">
+        <div class="sheet-top">
+          <div>
+            <div class="kicker">This board</div>
+            <h2 id="admin-title" class="rule-after">Admin</h2>
+          </div>
+          <button type="button" class="btn" id="admin-close">Close</button>
+        </div>
+
+        <form class="admin-panel panel" id="admin-signin">
+          <p class="admin-lede">
+            This is for whoever looks after the board. It is a short list of
+            email addresses held on the server, and an address that is not on
+            it is refused whatever password it arrives with.
+          </p>
+          <div class="admin-field">
+            <label for="admin-email">Email</label>
+            <input id="admin-email" name="email" type="email" autocomplete="username"
+                   autocapitalize="off" autocorrect="off" spellcheck="false"
+                   inputmode="email" maxlength="254" required />
+          </div>
+          <div class="admin-field">
+            <label for="admin-password">Password</label>
+            <input id="admin-password" name="password" type="password"
+                   autocomplete="current-password" maxlength="200" required />
+          </div>
+          <div class="admin-actions">
+            <button type="submit" class="btn primary" id="admin-submit">Sign in</button>
+            <span class="admin-busy" id="admin-busy" hidden>Checking</span>
+          </div>
+          <!-- role="alert" so a refusal is announced. It is the same sentence
+               for a wrong password and for an address that is not on the
+               list, which is the server's decision, not this page's. -->
+          <p class="admin-error" id="admin-error" role="alert"></p>
+        </form>
+
+        <div class="admin-panel panel" id="admin-signed" hidden>
+          <p class="admin-who">Signed in as <b id="admin-who"></b>.</p>
+          <p class="admin-lede" id="admin-until"></p>
+          <ul class="admin-can">
+            <li>Open any track and take it off the board, with every time flown on it.</li>
+            <li>Read the <a href="bugs.html">bugs and feedback</a> inbox.</li>
+          </ul>
+          <p class="admin-warn">
+            Removing a track cannot be undone. The times go with it.
+          </p>
+          <div class="admin-actions">
+            <button type="button" class="btn" id="admin-signout">Sign out</button>
           </div>
         </div>
       </div>

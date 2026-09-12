@@ -18,7 +18,11 @@ The three repositories are one product. `Mathew-Harvey/WebFPVSimulator` holds th
 
 **The palette is the simulator's, unchanged.** Cream for lit type, sakura for chrome, amber for an instrument, mint for a record, slate for type that should recede. A visitor arriving here from the simulator or the builder is looking at the same furniture, and that is deliberate.
 
-**Every response is credential free.** No cookie, no Authorization header, no session. Reflecting the request origin is therefore the same grant as `*`, and it is written that way so that adding credentials later fails closed rather than silently sharing them.
+**Nothing is ambiently authenticated, and no cookie is ever set.** Reflecting the request origin is therefore the same grant as `*`. That is the invariant, and `cors()` in `src/server.js` exists to keep it.
+
+There is one credential: an admin signs in at `/api/admin/login` and the page sends the token it gets back as a bearer header, by hand, on the admin routes. That does not break the invariant, because a browser never sends it on anybody else's behalf, so another origin's script gets exactly what curl gets. A cookie would break it, and `access-control-allow-credentials` must never be set. If either is ever wanted, this header has to name one origin instead.
+
+**The admin whitelist is a list of addresses, not a rule about them.** `src/admin.js` is the copy of record. No domain wildcard. The built-in entry's password ships as an scrypt hash, which keeps the word out of a public history and does not make it secret, so a host sets `BOARD_ADMINS` instead. Sessions are signed rather than stored: no table, no sweep, and changing a password invalidates every token it minted.
 
 **The site icon comes from the simulator's `scripts/icons.js`.** `public/icon.svg`, `public/favicon.ico` and `public/apple-touch-icon.png` are generated output, in mint, which is the colour this page paints a record in. Regenerate, do not edit: `node scripts/icons.js mint ../WebFPVSimulator-LeaderBoard/public` from a checkout of the simulator beside this one.
 
@@ -32,6 +36,7 @@ The three repositories are one product. `Mathew-Harvey/WebFPVSimulator` holds th
 ## Working rules
 
 - `npm test` runs `src/selftest.js` and is cheap. Run it for anything touching the store, the API surface or validation.
+- The password behind the shipped admin hash is deliberately not in this repository, so `npm test` cannot check the two against each other. Set `BOARD_SELFTEST_PASSWORD` to check it on a machine where knowing it is fine; the suite says `skip` rather than passing quietly when it is unset.
 - **Always ask, before the turn ends, whether to run a verification pass and at what scale.** Somebody looking at the
   real page against the real database learns in one minute what no self test can see, so whether to spend that minute is
   their call and not an assumption. Ask on every turn that changed code, including the turns where `npm test` already

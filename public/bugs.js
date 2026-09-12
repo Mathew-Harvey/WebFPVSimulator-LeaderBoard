@@ -38,8 +38,30 @@ function token() {
   return document.getElementById('token').value.trim();
 }
 
+/*
+ * THE SIGN IN FROM THE BOARD COUNTS HERE TOO.
+ *
+ * An admin of the board reads this inbox without a second secret: see
+ * bugsAuthorized in src/server.js. This page and the board are the same
+ * origin, so the token the Admin panel kept is already in this tab's
+ * sessionStorage and there is nothing to pass between them.
+ *
+ * The typed token still wins when there is one, because somebody who has
+ * gone to the trouble of pasting a token in the box means to use it.
+ */
+const ADMIN_KEY = 'webfpv.board.admin.v1';
+
+function adminToken() {
+  try {
+    return sessionStorage.getItem(ADMIN_KEY) || '';
+  } catch (e) {
+    /* Private mode. The box is still there. */
+    return '';
+  }
+}
+
 function headers() {
-  const t = token();
+  const t = token() || adminToken();
   const h = { 'content-type': 'application/json' };
   if (t) {
     h.authorization = `Bearer ${t}`;

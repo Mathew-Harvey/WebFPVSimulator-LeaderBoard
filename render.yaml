@@ -84,6 +84,21 @@ services:
       - key: BOARD_ADMIN_TOKEN
         sync: false
 
+      # Who may sign in to the Admin panel on the board's own page. Unset
+      # uses the built-in list in src/admin.js, which is one address whose
+      # password is published with the source, so set this here. One entry
+      # per line or comma separated, each email:scrypt:N:r:p:saltHex:hashHex
+      # from `node scripts/admin-hash.js someone@example.com`. Setting it
+      # REPLACES the built-in list rather than adding to it.
+      - key: BOARD_ADMINS
+        sync: false
+
+      # Optional. Mixed into the key that signs admin session tokens, so
+      # changing it signs every admin out at once. Leave unset unless that
+      # is wanted: changing a password already revokes its own sessions.
+      - key: BOARD_SESSION_SECRET
+        sync: false
+
 databases:
   - name: webfpvleaderboard-db
     plan: free

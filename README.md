@@ -109,7 +109,9 @@ to create things in, is in
 | GET | `/api/tracks/:id/times/:timeId/ghost` | That time's recorded lap, `{ id, name, lapMs, ghost }` |
 | GET | `/api/tracks/:id/gif` | That room's card animation, as `image/gif` |
 | POST | `/api/tracks/:id/gif` | Upload `{ gif, editKey? }`. Rooms only |
-| POST | `/api/tracks/:id/remove` | Take it off the board. `BOARD_ADMIN_TOKEN` only |
+| POST | `/api/tracks/:id/remove` | Take it off the board. Admin only |
+| POST | `/api/admin/login` | Sign in `{ email, password }`, get a session token |
+| GET | `/api/admin/session` | Who the bearer token is, or a 401 |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
 | POST | `/api/bugs` | Tester submit `{ kind, title, what, expected?, steps?, reporter?, context? }` |
 | GET | `/api/bugs` | Ticket summaries, newest first. `?status=open` `?kind=visual` |
@@ -121,23 +123,72 @@ the course. Publishing the same id again without that key is refused.
 Changing the flying layout clears the old times, because they were flown
 on a different course.
 
+## Signing in
+
+**Admin** in the masthead opens a sign in panel. An address on the board's
+whitelist and its password get a session token, which the page keeps in
+that tab's `sessionStorage` and sends as a bearer header on the admin
+routes. It runs out after twelve hours, and closing the tab ends it sooner.
+
+Signed in, the panel is the whole of what an admin can do:
+
+- open any track and take it off the board, with every time flown on it,
+- read the bugs inbox at `/bugs` without a separate `BUGS_TOKEN`.
+
+There is no cookie and no session on the server. The token is signed rather
+than stored, with a key derived from the whitelist itself, so it survives a
+restart and a second instance, and **changing a password invalidates every
+token that password minted**.
+
+### The whitelist
+
+`BOARD_ADMINS` on the service. One entry per line, or comma separated:
+
+```
+someone@example.com:scrypt:16384:8:1:<saltHex>:<hashHex>
+```
+
+Mint one without the password reaching a shell history:
+
+```bash
+node scripts/admin-hash.js someone@example.com
+```
+
+Setting `BOARD_ADMINS` **replaces** the built-in list rather than adding to
+it. That matters, because the built-in list is one address whose password
+ships as an scrypt hash in `src/admin.js`: hashing keeps the word itself
+out of the history of a public repository, and it does not make a short
+password secret, because anybody with the hash can try guesses against it
+offline. Treat the default as the thing that gets the screen working on a
+checkout, and set `BOARD_ADMINS` on any host that matters.
+
+`BOARD_SESSION_SECRET` is optional and unset by default. It is mixed into
+the signing key, so changing it signs every admin out at once without
+anybody's password changing.
+
+`email:plain:the password` is also accepted, for a local checkout. It is
+not the right answer on a host, and a hash is one command away.
+
 ## Taking a track off the board
 
-There is one way and it needs `BOARD_ADMIN_TOKEN`, set on the service and
-unset by default. An edit key is not a way in: it is enough to change a
-layout, which clears times that were flown on a layout that no longer
-exists, and it is not enough to delete other pilots' records outright.
-With the token unset, nothing on the board can be removed at all.
+A signed in admin does it from the track's own sheet: open the track,
+**Take off the board**, then press again to confirm. `BOARD_ADMIN_TOKEN`
+is the other way in and is what a script uses, because a script has no
+browser to sign in from:
 
 ```bash
 curl -X POST https://webfpv.org/board/api/tracks/trk-xxxxxxxx/remove \
   -H "Authorization: Bearer $BOARD_ADMIN_TOKEN"
 ```
 
+An edit key is not a way in: it is enough to change a layout, which clears
+times that were flown on a layout that no longer exists, and it is not
+enough to delete other pilots' records outright.
+
 It answers with what went: `{ id, name, author, times }`. The times go
 with the track, and the id is free to publish again afterwards, which is
 what makes this the way to replace a track published from a browser
-nobody still has.
+nobody still has. The service logs the removal and who did it.
 
 ## The card animation
 
@@ -191,7 +242,8 @@ curl -X POST http://127.0.0.1:3100/api/bugs/bug-xxxxxxxx \
 
 On a host with `BUGS_TOKEN` set, add
 `-H "Authorization: Bearer $BUGS_TOKEN"` to the GET and update calls.
-Testers never need that token.
+Testers never need that token, and neither does an admin signed in on the
+board: the same tab's session opens this inbox too.
 
 ## Licence
 
