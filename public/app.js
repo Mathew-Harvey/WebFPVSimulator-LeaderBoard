@@ -458,6 +458,11 @@ function matches(track, needle) {
   if (String(track.author).toLowerCase().includes(needle)) {
     return true;
   }
+  /* The designer and the series, where the track has them: somebody typing
+   * "MrE" wants Track 6 whoever published it, and "RaceGOW5" is the set. */
+  if ([track.designer, track.series].some((v) => String(v || '').toLowerCase().includes(needle))) {
+    return true;
+  }
   const times = timesFor(track.id);
   return Boolean(times && times.some((row) => String(row.name).toLowerCase().includes(needle)));
 }

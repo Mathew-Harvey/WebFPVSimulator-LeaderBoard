@@ -302,6 +302,28 @@ async function testValidate() {
   check('creditOf is empty on a track with no credit block',
     creditOf(roomDoc()).designer === '' && creditOf(null).designer === ''
     && creditOf({ credit: 'nonsense' }).designer === '');
+  /*
+   * AND IT READS STRINGS AND NOTHING ELSE. The simulator's writer only ever
+   * sends strings, but the document is whatever the publish request said it
+   * was, and String() of an object or an array is a name nobody typed.
+   */
+  const odd = creditOf({ credit: { designer: { name: 'x' }, series: ['a', 'b'] } });
+  check('creditOf reads a string and nothing else',
+    odd.designer === '' && odd.series === ''
+    && creditOf({ credit: { designer: 7, series: true } }).designer === ''
+    && creditOf({ credit: ['MrE'] }).designer === '',
+    JSON.stringify(odd));
+  const spaced = creditOf({ credit: { designer: ' Cumber \n\n and\t Hotspur\u0000 ' } });
+  check('creditOf closes up whitespace and drops control characters',
+    spaced.designer === 'Cumber and Hotspur', JSON.stringify(spaced.designer));
+  check('creditOf caps a name at eighty characters',
+    creditOf({ credit: { designer: 'x'.repeat(200) } }).designer.length === 80);
+  const rowOdd = rowToSummary({
+    id: 'trk-00000002', name: 'Room', author: 'somebody', document: { ...roomDoc(), credit: { designer: ['a'] } },
+    gates: 1, elements: 1, has_logo: false, published_utc: '', updated_utc: '', tags: [],
+  });
+  check('a Postgres row with a junk credit block still summarises, with no designer',
+    rowOdd.designer === '' && rowOdd.series === '' && rowOdd.name === 'Room', JSON.stringify(rowOdd.designer));
 
   /*
    * THE TWO WRITERS OF ONE CONTRACT, HELD AGAINST EACH OTHER.

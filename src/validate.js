@@ -322,7 +322,17 @@ export function trackClassOf(document) {
  */
 export function creditOf(document) {
   const c = isObject(document) && isObject(document.credit) ? document.credit : {};
-  const text = (v) => String(v == null ? '' : v).trim().slice(0, 80);
+  /*
+   * A NAME IS A STRING, and nothing else is read as one. This used to
+   * String() whatever it found, and String() of an object is
+   * "[object Object]" and of an array is its elements joined with commas,
+   * either of which would go on a card as if somebody had typed it. Control
+   * characters go and runs of whitespace close up, so the summary the API
+   * serves and the text the card draws are the same name.
+   */
+  const text = (v) => (typeof v === 'string'
+    ? v.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim()
+    : '');
   return { designer: text(c.designer), series: text(c.series) };
 }
 
