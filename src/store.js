@@ -158,7 +158,7 @@ const CONFLICT = {
   conflict: true,
 };
 
-function summaryOf(track, times) {
+export function summaryOf(track, times) {
   const ranked = [...times].sort(byLap);
   const best = ranked[0] || null;
   return {
@@ -1118,7 +1118,7 @@ class PgStore {
  * plan is always re-derived from the document, which is why the stored
  * `plan` column is written and never read back.
  */
-function rowToSummary(row) {
+export function rowToSummary(row) {
   return {
     id: row.id,
     name: row.name,
@@ -1127,6 +1127,12 @@ function rowToSummary(row) {
     elements: row.elements,
     hasLogo: row.has_logo,
     trackClass: trackClassOf(row.document),
+    /* The designer and the series, read off the stored document. The twin
+     * of the same line in summaryOf, and the reason the pair is now checked
+     * against each other below: this one was forgotten for a deploy, so the
+     * file store named the builder and the live board went on naming the
+     * publisher. */
+    ...creditOf(row.document),
     plan: planFromDocument(row.document),
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,

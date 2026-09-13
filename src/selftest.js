@@ -23,7 +23,7 @@ import {
 import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
 } from './admin.js';
-import { openStore } from './store.js';
+import { openStore, rowToSummary, summaryOf } from './store.js';
 import { guessSimOrigin, isLoopback } from '../public/origins.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -302,6 +302,38 @@ async function testValidate() {
   check('creditOf is empty on a track with no credit block',
     creditOf(roomDoc()).designer === '' && creditOf(null).designer === ''
     && creditOf({ credit: 'nonsense' }).designer === '');
+
+  /*
+   * THE TWO WRITERS OF ONE CONTRACT, HELD AGAINST EACH OTHER.
+   *
+   * A track summary is built twice: summaryOf from the file store's object
+   * and rowToSummary from a Postgres row. The comment on rowToSummary has
+   * said for a while that anything added to one has to be added to the
+   * other, because `best` was once missing from it. The designer was missing
+   * from it too, for exactly one deploy: the file store named the builder,
+   * the live board went on naming the publisher, and nothing here noticed.
+   * So the shapes are compared now rather than trusted.
+   */
+  const credDoc = { ...roomDoc(), credit: { designer: 'MrE', series: 'RaceGOW5' } };
+  const fileSide = summaryOf({
+    id: 'trk-00000001', name: 'Room', author: 'somebody', document: credDoc,
+    gates: 1, elements: 1, hasLogo: false, publishedUtc: '', updatedUtc: '', tags: [],
+  }, []);
+  const pgSide = rowToSummary({
+    id: 'trk-00000001', name: 'Room', author: 'somebody', document: credDoc,
+    gates: 1, elements: 1, has_logo: false, published_utc: '', updated_utc: '', tags: [],
+  });
+  /* `times` and `best` are the two the Postgres path adds around
+   * rowToSummary, from its own queries, so they are not expected on the row
+   * side. Everything else has to match. */
+  const keysOf = (o) => Object.keys(o).filter((k) => k !== 'times' && k !== 'best').sort().join(',');
+  check('the file store and the Postgres row build the same summary shape',
+    keysOf(fileSide) === keysOf(pgSide),
+    `file ${keysOf(fileSide)} | row ${keysOf(pgSide)}`);
+  check('and both of them name the designer',
+    fileSide.designer === 'MrE' && pgSide.designer === 'MrE'
+    && fileSide.series === 'RaceGOW5' && pgSide.series === 'RaceGOW5',
+    `${fileSide.designer}/${pgSide.designer}`);
   const roomPlan = planFromDocument(room);
   check('the plan carries the class', roomPlan.trackClass === 'micro', roomPlan.trackClass);
   check('the plan carries the room, not a field',
