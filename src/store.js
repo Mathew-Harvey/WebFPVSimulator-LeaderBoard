@@ -26,7 +26,7 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { hashEditKey, planFromDocument, trackClassOf } from './validate.js';
+import { creditOf, hashEditKey, planFromDocument, trackClassOf } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -172,6 +172,10 @@ function summaryOf(track, times) {
      * is, so there is one copy of the truth and no migration. Every track
      * published before the class existed reads as the field it was. */
     trackClass: trackClassOf(track.document),
+    /* The designer, and the series the track belongs to, read off the
+     * document the same way. Empty on a track whose builder left the credit
+     * block alone, which is most of them. See creditOf in validate.js. */
+    ...creditOf(track.document),
     plan: livePlan(track),
     publishedUtc: track.publishedUtc,
     updatedUtc: track.updatedUtc,

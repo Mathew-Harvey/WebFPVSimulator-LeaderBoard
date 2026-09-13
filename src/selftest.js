@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
-  normaliseThreeMs, planFromDocument, trackClassOf,
+  creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
 } from './validate.js';
 import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
@@ -282,6 +282,26 @@ async function testValidate() {
   check('trackClassOf defaults anything else to the field',
     trackClassOf({}) === 'full' && trackClassOf(null) === 'full'
     && trackClassOf({ trackClass: 'nonsense' }) === 'full');
+
+  /*
+   * THE DESIGNER SURVIVES THE ROUND TRIP.
+   *
+   * Eight of the tracks on this board were built by six other people and
+   * published by one, and for a while the card said "Built by" the
+   * publisher. The document has always carried the designer; this is the
+   * read that puts it in front of a visitor, so it is checked here.
+   */
+  const credited = { ...roomDoc(), credit: { designer: '  Skittles  ', series: 'RaceGOW5', broughtOverBy: 'andAgainFPV' } };
+  const creditOut = inspectDocument(credited);
+  check('a credited track is accepted', !creditOut.error, creditOut.error);
+  check('and its designer is kept on the document',
+    creditOut.document.credit.designer === '  Skittles  ', JSON.stringify(creditOut.document.credit));
+  const read = creditOf(creditOut.document);
+  check('and creditOf trims it for the page',
+    read.designer === 'Skittles' && read.series === 'RaceGOW5', JSON.stringify(read));
+  check('creditOf is empty on a track with no credit block',
+    creditOf(roomDoc()).designer === '' && creditOf(null).designer === ''
+    && creditOf({ credit: 'nonsense' }).designer === '');
   const roomPlan = planFromDocument(room);
   check('the plan carries the class', roomPlan.trackClass === 'micro', roomPlan.trackClass);
   check('the plan carries the room, not a field',

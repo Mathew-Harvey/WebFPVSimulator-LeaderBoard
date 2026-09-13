@@ -305,6 +305,27 @@ export function trackClassOf(document) {
   return isObject(document) && document.trackClass === 'micro' ? 'micro' : 'full';
 }
 
+/*
+ * WHO BUILT THE TRACK, WHICH IS NOT ALWAYS WHO PUBLISHED IT.
+ *
+ * A board track's `author` is the account that put it here. On a track
+ * somebody built in their own living room those are the same person, and on
+ * the eight RaceGOW5 rooms they are not: Skittles, AyyyKayyy, MrE, FPVBean,
+ * Cumber and Hotspur and the Lego Dans designed them, and one person brought
+ * all eight over. The builder writes that down in the document's `credit`
+ * block, the publish has always sent it, and until now nothing on this board
+ * read it back, so every one of those cards said "Built by" the wrong name.
+ *
+ * Derived from the stored document on every read, like the class and the
+ * plan, so there is one copy of the truth and no migration. Drawn as text by
+ * the page, never as markup.
+ */
+export function creditOf(document) {
+  const c = isObject(document) && isObject(document.credit) ? document.credit : {};
+  const text = (v) => String(v == null ? '' : v).trim().slice(0, 80);
+  return { designer: text(c.designer), series: text(c.series) };
+}
+
 /* ------------------------------------------------------------------ */
 /* The card animation                                                  */
 /* ------------------------------------------------------------------ */

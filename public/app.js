@@ -628,9 +628,23 @@ function cardFor(track, config) {
 
   const head = el('div', 'head');
   head.append(el('h2', null, track.name));
+  /*
+   * THE DESIGNER FIRST WHERE THERE IS ONE. A board track's author is who
+   * published it, and on a track brought over from somewhere else that is
+   * not who built it. The document says so and the summary now carries it.
+   */
   const by = el('p', 'by');
-  by.append('by ');
-  by.append(el('b', null, track.author));
+  if (track.designer) {
+    by.append('designed by ');
+    by.append(el('b', null, track.designer));
+    if (track.series) {
+      by.append(` for ${track.series}`);
+    }
+    by.append(`, published by ${track.author}`);
+  } else {
+    by.append('by ');
+    by.append(el('b', null, track.author));
+  }
   by.append(` \u00b7 ${plural(track.gates, 'gate', 'gates')}`);
   head.append(by);
 
@@ -1704,8 +1718,15 @@ async function paintSheet(track) {
   byId('sheet-title').textContent = track.name;
   const by = byId('sheet-by');
   by.textContent = '';
-  by.append('Built by ');
-  by.append(el('b', null, track.author));
+  if (track.designer) {
+    by.append('Designed by ');
+    by.append(el('b', null, track.designer));
+    by.append(track.series ? ` for ${track.series}.` : '.');
+    by.append(` Brought over by ${track.author}`);
+  } else {
+    by.append('Built by ');
+    by.append(el('b', null, track.author));
+  }
   const published = formatWhen(track.publishedUtc);
   by.append(published ? `. Published ${published}.` : '.');
 
