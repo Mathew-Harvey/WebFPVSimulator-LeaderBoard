@@ -34,6 +34,15 @@ A Fly link looks like this:
 The simulator fetches `/api/tracks/{id}/document`, builds the world, and
 offers to post a lap time back here under the pilot's name.
 
+The **WEBFPV** mark, in the masthead and again in the sticky spine, is the
+way back to the front door, and it opens in this tab rather than the
+simulator's: it is a way back, and a way back that leaves this page open
+behind it is not one. Where the front door is comes from `public/origins.js`
+without asking the server, the same way the simulator's address does. A
+checkout finds it on `http://127.0.0.1:8080`, the `/board` mount finds
+whatever it hangs off, and anything else is `https://webfpv.org`, which is
+the one line a fork changes.
+
 ## Run locally
 
 Node 22 or newer. No database required: a JSON file in `data/` is enough.

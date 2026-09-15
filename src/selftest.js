@@ -24,7 +24,7 @@ import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
 } from './admin.js';
 import { openStore, rowToSummary, summaryOf } from './store.js';
-import { guessSimOrigin, isLoopback } from '../public/origins.js';
+import { guessSimOrigin, landingOrigin, isLoopback } from '../public/origins.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let failed = 0;
@@ -787,7 +787,18 @@ async function testHttp() {
       String(origins.headers.get('content-type') || '').includes('javascript'));
     check('app.js imports it relatively', app.includes("from './origins.js'"));
     check('origins.js exports what app.js imports',
-      originsBody.includes('export function guessSimOrigin'));
+      originsBody.includes('export function guessSimOrigin')
+      && originsBody.includes('export function landingOrigin'));
+    /* The mark in the masthead and the one in the spine are the same mark
+     * and both are the way home, so both carry the id bindHome looks for.
+     * A rename on one side and not the other leaves a link pointed at a
+     * checkout's port 8080 on a public board, and it looks fine. */
+    check('both marks are bound to the front door',
+      html.includes('id="brand-home"') && html.includes('id="spine-home"')
+      && app.includes("['brand-home', 'spine-home']"));
+    const homeAnchors = html.match(/<a\b[^>]*id="(?:brand|spine)-home"[^>]*>/g) || [];
+    check('the way home stays in this tab',
+      homeAnchors.length === 2 && homeAnchors.every((a) => !a.includes('target=')));
     const cardFn = app.slice(app.indexOf('function cardFor('));
     const attach = cardFn.indexOf('card.append(body)');
     const paint = cardFn.indexOf('paintPodium(');
@@ -1428,6 +1439,26 @@ function testOrigins() {
     guessSimOrigin(...at('https://webfpv.org/')) === null);
 
   check('a missing location is not a crash', guessSimOrigin(null, null) === null);
+
+  /*
+   * The front door, which is asked in every case rather than declining in
+   * the one that cannot be derived. A board somewhere this file has never
+   * heard of still belongs to the landing page named in origins.js, so the
+   * mark in the masthead has somewhere to go from anywhere.
+   */
+  check('a checkout on 127.0.0.1 finds the front door on 8080',
+    landingOrigin(...at('http://127.0.0.1:3100/')) === 'http://127.0.0.1:8080');
+  check('localhost by name, same answer',
+    landingOrigin(...at('http://localhost:3100/')) === 'http://localhost:8080');
+  check('the /board mount hangs off the front door',
+    landingOrigin(...at('https://webfpv.org/board/')) === 'https://webfpv.org');
+  check('the bug page under the mount answers the same',
+    landingOrigin(...at('https://webfpv.org/board/bugs')) === 'https://webfpv.org');
+  check('a board on its own host names the front door rather than declining',
+    landingOrigin(...at('https://webfpvsimulator-leaderboard.onrender.com/'))
+      === 'https://webfpv.org');
+  check('a missing location still answers', landingOrigin(null, null) === 'https://webfpv.org');
+
   check('loopback set covers the hosts a checkout uses',
     isLoopback('127.0.0.1') && isLoopback('localhost') && isLoopback('::1')
       && !isLoopback('webfpv.org'));

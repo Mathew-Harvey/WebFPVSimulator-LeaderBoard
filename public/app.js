@@ -34,7 +34,7 @@
  * along with WebFPVLeaderboard. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { guessSimOrigin as guess } from './origins.js';
+import { guessSimOrigin as guess, landingOrigin as frontDoor } from './origins.js';
 import { fillCredits } from './credits.js';
 import {
   fieldSize, paintPlans, planCanvas, planLabel,
@@ -82,6 +82,21 @@ function here(path) {
 function guessSimOrigin() {
   try {
     return guess(window.location, HERE);
+  } catch (e) {
+    /* No window, as in Node. */
+    return null;
+  }
+}
+
+/*
+ * Where the front door is. Not a config field and not a guess that can
+ * decline: there is one landing page and origins.js names it. See the long
+ * comment there for why this question is not the same shape as the one
+ * above.
+ */
+function landingHref() {
+  try {
+    return `${frontDoor(window.location, HERE)}/`;
   } catch (e) {
     /* No window, as in Node. */
     return null;
@@ -1937,6 +1952,28 @@ function bindLinks(config) {
   set('foot-credits', credits);
 }
 
+/*
+ * THE MARK GOES HOME, and it is deliberately not part of bindLinks.
+ *
+ * bindLinks writes the simulator's tab name onto everything it touches,
+ * because those links cross to the simulator and a pilot wants one of it.
+ * This link crosses the other way, to the page the visitor came in through,
+ * and it belongs in the tab they are standing in. It also owes nothing to
+ * /api/config, so it is bound once and never corrected.
+ */
+function bindHome() {
+  const href = landingHref();
+  if (!href) {
+    return;
+  }
+  for (const id of ['brand-home', 'spine-home']) {
+    const n = byId(id);
+    if (n) {
+      n.href = href;
+    }
+  }
+}
+
 function bindCraftSwitch() {
   for (const [id, craft] of [['craft-full', 'full'], ['craft-micro', 'micro']]) {
     const btn = byId(id);
@@ -2141,6 +2178,7 @@ async function start() {
    * served config correct it if and when it arrives.
    */
   bindLinks(state.config);
+  bindHome();
 
   /*
    * The config request is NOT fatal, and the tracks request is.

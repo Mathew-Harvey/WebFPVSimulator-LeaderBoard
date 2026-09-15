@@ -245,6 +245,20 @@
       }
       .brand h1 .fpv { color: var(--sakura); }
 
+      /* The mark is a link and must not look like one until it is pointed
+         at: a masthead that arrives underlined is not a masthead. So it
+         inherits its colour and its shadow, and the hover is the one every
+         other link on this page uses, the whole word going sakura. The
+         focus ring is the page's own, from the block at the top, because a
+         keyboard has to be able to find the way home too. */
+      .brand h1 a.home, a.spine-mark {
+        color: inherit;
+        text-decoration: none;
+        transition: color 120ms ease;
+      }
+      .brand h1 a.home:hover, .brand h1 a.home:focus-visible,
+      a.spine-mark:hover, a.spine-mark:focus-visible { color: var(--sakura); }
+
       .eyebrow {
         display: flex;
         align-items: center;
@@ -1783,7 +1797,25 @@
 
     <header class="mast">
       <div class="brand">
-        <h1>WEB<span class="fpv">FPV</span></h1>
+        <!--
+          THE MARK IS THE WAY HOME, IN BOTH PLACES IT APPEARS.
+
+          A visitor who arrives here from the front door has the product's
+          name in the top left corner and nothing under it, so the first
+          thing they try when they want to go back is the thing every other
+          site on the internet has taught them to try. The href in the
+          markup is the loopback address a checkout serves the landing page
+          on, the same fallback convention the simulator links use; app.js
+          replaces it with the real one at boot. See bindHome there and
+          landingOrigin in origins.js.
+
+          It stays in this tab on purpose. Every other cross-origin link in
+          this masthead crosses to the simulator and names the simulator's
+          tab, because a pilot wants the board still open behind it. This one
+          is a way back, and a way back that leaves the page you are
+          leaving open behind it is not one.
+        -->
+        <h1><a class="home" id="brand-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a></h1>
         <div class="eyebrow">Tracks and times</div>
         <p class="invite">
           Every published track, and the times flown on it. Open one, fly it in
@@ -1830,7 +1862,7 @@
     <div class="spine">
       <div class="chequer" aria-hidden="true"></div>
       <div class="spine-inner">
-        <span class="spine-mark">WEB<span class="fpv">FPV</span></span>
+        <a class="spine-mark" id="spine-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a>
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
           <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>

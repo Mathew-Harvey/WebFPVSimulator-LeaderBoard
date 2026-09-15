@@ -1,5 +1,6 @@
 /*
- * origins.js: where the simulator is, worked out without asking the server.
+ * origins.js: where the simulator and the front door are, worked out
+ * without asking the server.
  *
  * This file is part of WebFPVLeaderboard.
  *
@@ -67,4 +68,49 @@ export function guessSimOrigin(location, here) {
     return `${location.origin}${path.replace(/\/board$/, '/sim')}`;
   }
   return null;
+}
+
+/*
+ * WHERE THE FRONT DOOR IS, WHICH IS A DIFFERENT QUESTION WITH A DIFFERENT
+ * SHAPE OF ANSWER.
+ *
+ * guessSimOrigin returns null for a board on a host of its own, because a
+ * guess there would be worse than an absence and /api/config carries a
+ * simOrigin that settles it. There is no such field for the landing page and
+ * there does not need to be one: the landing page is a single published
+ * address, and a deploy of this board that is not somebody's checkout belongs
+ * to it. So this answers in every case, and PRODUCTION_LANDING_ORIGIN is the
+ * one line a fork changes.
+ *
+ * The simulator works the same thing out in the same shape in its
+ * src/share/board.js, with the same two constants. The three repositories are
+ * one product and the two files must not disagree about where its front door
+ * is.
+ *
+ * The two derivable layouts are the ones guessSimOrigin already knows:
+ *
+ *   loopback       the landing page is served by its own scripts/serve.js on
+ *                  port 8080, which is what DEPLOY.md says.
+ *   a /board mount the landing page is what the mount hangs off, which is the
+ *                  production layout: webfpv.org/board sits under webfpv.org.
+ */
+export const PRODUCTION_LANDING_ORIGIN = 'https://webfpv.org';
+export const LOCAL_LANDING_PORT = 8080;
+
+export function landingOrigin(location, here) {
+  if (!location) {
+    return PRODUCTION_LANDING_ORIGIN;
+  }
+  const host = location.hostname;
+  if (isLoopback(host)) {
+    const protocol = location.protocol === 'https:' ? 'https:' : 'http:';
+    return `${protocol}//${host || '127.0.0.1'}:${LOCAL_LANDING_PORT}`;
+  }
+  const path = String((here && here.pathname) || '/').replace(/\/+$/, '');
+  if (/\/board$/.test(path)) {
+    /* An empty remainder is the production case and leaves the bare origin,
+     * which is exactly right: webfpv.org/board hangs off webfpv.org. */
+    return `${location.origin}${path.replace(/\/board$/, '')}`;
+  }
+  return PRODUCTION_LANDING_ORIGIN;
 }
