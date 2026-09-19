@@ -297,11 +297,14 @@ sponsors is not, because it includes the ones with no traffic yet.
 ### The country
 
 `edge/router.js` in the simulator's repository puts `x-webfpv-country` on
-the request from Cloudflare's own `request.cf.country`. The board believes
-it only when `BOARD_TRUST_PROXY` is `1`, exactly like the forwarded host, so
-a directly exposed instance cannot be told where its visitors are. On a
-checkout and on the bare Render address every row is `ZZ` and the page
-prints Unknown.
+the request from Cloudflare's own `request.cf.country`, overwriting anything
+the client sent. The board believes the header only when `BOARD_TRUST_PROXY`
+is `1`, exactly like the forwarded host. On a checkout that is unset, so
+every row is `ZZ` and the page prints Unknown. On the bare Render address
+it is set and there is no Worker in front, so an honest visitor is Unknown
+and a client that writes the header itself is believed: the same trust that
+address already extends to `x-forwarded-for`, on a public counter, and the
+reason the domain rather than the bare address is the front door.
 
 ## Bug tickets
 

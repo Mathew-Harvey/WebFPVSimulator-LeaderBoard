@@ -1930,8 +1930,12 @@ function clearHash() {
  * tracks are listed and means nothing beside a page of counters, so it is
  * hidden with the section it governs rather than standing above both.
  */
+let shownTab = '';
+
 function showTab(name) {
   const stats = name === 'stats';
+  const changed = Boolean(shownTab) && shownTab !== name;
+  shownTab = name;
   const tracks = byId('view-tracks');
   const board = byId('view-stats');
   const craft = byId('craftswitch');
@@ -1954,6 +1958,20 @@ function showTab(name) {
     /* One tab stop for the row, which is how a tablist is meant to work:
      * Tab reaches the chosen tab and the arrow keys move between them. */
     tab.tabIndex = on ? 0 : -1;
+  }
+  /*
+   * A reader who followed the footer's link is standing at the foot of the
+   * page while the section they asked for swaps in above them, out of
+   * sight. Bring the row into view then, and only then: a click on a tab
+   * that is already on screen must not move the page, and the first paint
+   * of a pasted #stats must not scroll the masthead away.
+   */
+  if (changed) {
+    const row = byId('tabs');
+    const box = row ? row.getBoundingClientRect() : null;
+    if (box && (box.top < 0 || box.bottom > window.innerHeight)) {
+      row.scrollIntoView({ block: 'start', behavior: reduceMotion() ? 'auto' : 'smooth' });
+    }
   }
   showStats(stats);
 }
@@ -2187,6 +2205,30 @@ function bindTabs() {
     return;
   }
   const tabs = [...row.querySelectorAll('[role="tab"]')];
+  /*
+   * THE TWO TABS USED TO JUMP DIFFERENTLY. #tracks is the address of <main>,
+   * so the browser scrolled it to the top and took the masthead with it,
+   * while #stats matches no element and moved nothing. A plain left click
+   * now sets the address by hand and routes, with no scroll; every other
+   * kind of click, a middle button, a modifier key, is left to the browser,
+   * because those are somebody opening the tab in a new one and the href is
+   * real for exactly that reason. pushState fires no hashchange, so route()
+   * is called here; Back does fire one, because the entries differ in
+   * fragment, and the listener handles that.
+   */
+  for (const tab of tabs) {
+    tab.addEventListener('click', (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+        return;
+      }
+      e.preventDefault();
+      const href = tab.getAttribute('href') || '#';
+      if (location.hash !== href) {
+        history.pushState(null, '', href);
+      }
+      route();
+    });
+  }
   row.addEventListener('keydown', (e) => {
     const at = tabs.indexOf(document.activeElement);
     if (at < 0) {
@@ -2300,7 +2342,7 @@ async function start() {
    */
   mountStats(here('api/stats'));
   bindTabs();
-  pingVisit(here('api/stats/events'), 'board');
+  pingVisit('board', here('api/stats/events'));
   /*
    * And routed now, not only at the end. The two returns below leave on an
    * empty board and on a failed list, and a visitor who followed a #stats

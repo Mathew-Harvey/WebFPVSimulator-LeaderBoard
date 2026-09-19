@@ -1429,9 +1429,8 @@ async function testHttp() {
     const visit = await post({
       v: 1, kind: 'visit', surface: 'sim', returning: false, source: 'rotorriot',
     }, { 'x-webfpv-country': 'AU' });
-    check('a visit is taken', visit.status === 204);
+    check('a visit posted as text/plain is taken', visit.status === 204);
     check('and it answers with no body at all', (await visit.text()) === '');
-    check('a text/plain body is read', true);
 
     await post({ v: 1, kind: 'visit', surface: 'board', returning: true, source: 'not-a-sponsor' },
       { 'x-webfpv-country': 'nonsense' });
@@ -1497,10 +1496,13 @@ async function testHttp() {
     check('and nobody has been back another day inside one test run',
       stats.board.pilotsOnMoreThanOneDay === 0);
 
-    /* The flood gate. Its allowance is 200 in ten minutes, which is far
-     * above a flying tab's one a minute, and this spends the rest of it. */
+    /* The flood gate. Its allowance is 600 in ten minutes, which is fifty
+     * pilots behind one address each flushing once a minute, and this spends
+     * the rest of it. Every one of these is a file write, so it is the slow
+     * part of this suite and it is worth exactly what it costs. */
     let flooded = 0;
-    for (let i = 0; i < 260; i += 1) {
+    const ATTEMPTS = 660;
+    for (let i = 0; i < ATTEMPTS; i += 1) {
       /* eslint-disable-next-line no-await-in-loop */
       const r = await post({ v: 1, kind: 'flush', tab: `tab-flood-${i}`, craft: '5inch', flightS: 1 });
       if (r.status === 429) {
@@ -1509,9 +1511,11 @@ async function testHttp() {
     }
     check('an address that posts hundreds of events is shut off', flooded > 0);
 
-    /* And a refused event never spent the allowance in the first place,
-     * which is why the gate above took as long as it did to close. */
-    check('the gate closed after the allowance rather than before it', flooded < 200);
+    /* And it closed AFTER a room's worth went through, not before: at least
+     * five hundred of these landed. A refused event never spends the
+     * allowance, which is why the junk posted above did not bring the gate
+     * forward. */
+    check('the gate closed after the allowance rather than before it', ATTEMPTS - flooded >= 500);
 
     /* The one thing an admin gets that the public page does not: the list
      * of sponsors, with the link each one is given. */

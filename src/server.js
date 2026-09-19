@@ -152,7 +152,7 @@ function flyingNow() {
  * one tick, and it is enough that a hundred readers cost the database what
  * one does.
  *
- * COUNT_WINDOW_DAYS is the chart's width and the only window this route
+ * STATS_WINDOW_DAYS is the chart's width and the only window this route
  * offers. A `?days=` would be a second thing to validate and a second cache
  * key for a page that asks for one number.
  */
@@ -160,11 +160,21 @@ const STATS_CACHE_MS = 20_000;
 const STATS_WINDOW_DAYS = 30;
 let statsCache = { at: 0, body: '' };
 
-/* How many events one address may post in ten minutes. A flying tab spends
- * one a minute, a pilot with the simulator and the board open spends a few
- * more, and 200 is far above either and far below anything that could move
- * a public number. */
-const STATS_FLOOD_LIMIT = 200;
+/*
+ * How many events one address may post in ten minutes.
+ *
+ * A flying tab spends one a minute, so a PILOT never gets near this. A
+ * ROOM does: a club night is thirty pilots behind one public address, each
+ * flushing once a minute, which is three hundred in ten minutes, and a
+ * gate of two hundred would have silenced the room seven minutes in. Six
+ * hundred is fifty pilots on one address, which is a big night.
+ *
+ * It is not the defence against a stranger inflating a public number, and
+ * it is not meant to be: the bounds on a flush and the fold on every
+ * dimension are, and the page says it counts what it is told. This stops a
+ * script hammering the database, and nothing else.
+ */
+const STATS_FLOOD_LIMIT = 600;
 
 /*
  * GLOBAL PRIVACY CONTROL, and it is honoured on the server as well as in

@@ -218,7 +218,7 @@ export function markVisit() {
  * set a header and a simple request needs no preflight; the board never
  * reads the content type.
  */
-export function sendEvent(url, payload) {
+export function sendEvent(payload, url) {
   if (!counting()) {
     return false;
   }
@@ -241,17 +241,19 @@ export function sendEvent(url, payload) {
 }
 
 /* One visit, from whichever page called. Silent about everything: a board
- * that is down must cost this page nothing at all. */
-export function pingVisit(url, surface) {
+ * that is down must cost this page nothing at all. The argument order is
+ * the simulator copy's, payload first, so a fix carried between the two
+ * lands in the same place. */
+export function pingVisit(surface, url) {
   captureSource();
   if (!counting()) {
-    return;
+    return false;
   }
   const visit = markVisit();
   if (!visit) {
-    return;
+    return false;
   }
-  sendEvent(url, { kind: 'visit', surface, returning: visit.returning });
+  return sendEvent({ kind: 'visit', surface, returning: visit.returning }, url);
 }
 
 /* ------------------------------------------------------------------ */
@@ -269,8 +271,15 @@ const view = {
   error: '',
   shown: false,
   timer: 0,
+  /* The "updated N s ago" line has its own clock, because a line that
+   * only repaints on a poll says "just now" for thirty seconds. */
+  fresh: 0,
   fetching: false,
   resize: 0,
+  /* Whether the reader has the table open. A poll rebuilds the charts and
+   * the table with them, and a table that snaps shut every thirty seconds
+   * is a table nobody can read. */
+  tableOpen: false,
 };
 
 function byId(id) {
@@ -401,11 +410,16 @@ function barChart({
   const barW = Math.max(2, slot - 2);
   const base = CHART_PAD_T + CHART_PLOT_H;
 
+  /*
+   * role="group", NOT role="img". An image's descendants are presentational
+   * to assistive technology, which would leave thirty focusable columns
+   * that Tab reaches and a screen reader cannot name. A group exposes them.
+   */
   const node = svg('svg', {
     viewBox: `0 0 ${w} ${h}`,
     width: w,
     height: h,
-    role: 'img',
+    role: 'group',
     'aria-label': label,
   });
 
@@ -462,7 +476,9 @@ function barChart({
       width: slot,
       height: CHART_PLOT_H,
       tabindex: 0,
-      role: 'button',
+      /* A labelled image, not a button: pressing it does nothing, and a
+       * role that promises otherwise is a promise to a screen reader. */
+      role: 'img',
       'aria-label': tip(row).flat,
     });
     const title = svg('title', {});
@@ -574,6 +590,10 @@ function chartBlock({
  */
 function chartTable(rows) {
   const box = el('details', 'chart-table');
+  box.open = view.tableOpen;
+  box.addEventListener('toggle', () => {
+    view.tableOpen = box.open;
+  });
   box.append(el('summary', null, 'As a table'));
   const scroll = el('div', 'scroll');
   const table = el('table');
@@ -760,6 +780,19 @@ function paintTrend() {
   }
   const d = view.data;
   const rows = d.days;
+  /*
+   * A poll or a resize rebuilds both charts. A reader who had a column
+   * focused, or the table open, had both taken off them every thirty
+   * seconds, which is exactly the interval at which they were reading. So
+   * what they were on is noted before the rebuild and handed back after.
+   */
+  const active = document.activeElement;
+  const held = active && active.classList && active.classList.contains('bar-hit')
+    ? {
+      chart: [...plate.querySelectorAll('svg')].findIndex((s) => s.contains(active)),
+      at: active.dataset.at,
+    }
+    : null;
   plate.hidden = false;
   plate.textContent = '';
   plate.append(el('div', 'kicker', `The last ${d.window.days} days`));
@@ -791,6 +824,13 @@ function paintTrend() {
     label: `Laps flown per day over the last ${rows.length} days. The table below carries every value.`,
   }));
   plate.append(chartTable(rows));
+  if (held && held.chart >= 0) {
+    const chart = plate.querySelectorAll('svg')[held.chart];
+    const again = chart && chart.querySelector(`.bar-hit[data-at="${held.at}"]`);
+    if (again) {
+      again.focus();
+    }
+  }
 }
 
 function paintRanks() {
@@ -806,12 +846,16 @@ function paintRanks() {
   countries.append(el('div', 'kicker', 'Where from'));
   countries.append(el('h3', null, 'Countries'));
   countries.append(el('p', 'plate-note',
-    'Named by the edge in front of the site from an address this board never sees or stores.'));
+    'Named by the edge in front of the site from an address this board never stores.'));
+  /* The bar is sessions, the same number the rows are ranked by. It used to
+   * fall back to pilots on a row with no sessions, which put a country of
+   * five hundred visitors above one of three flights on a list whose
+   * heading said sessions. */
   countries.append(rankList({
     rows: d.countries,
     unknownKey: 'ZZ',
     name: (r) => countryName(r.key),
-    value: (r) => r.sessions || r.visits,
+    value: (r) => r.sessions,
     note: (r) => `${count(r.sessions)} / ${count(r.visits)}`,
     moreWord: 'country',
     moreWords: 'countries',
@@ -824,10 +868,16 @@ function paintRanks() {
   sources.append(el('h3', null, 'Direct and sponsors'));
   sources.append(el('p', 'plate-note',
     'A sponsor link carries one word. Anything this board does not recognise is counted as Other.'));
+  /* Ranked, barred and printed by PILOTS, which is the number a sponsor
+   * is owed: how many people their poster brought. The board ranks every
+   * dimension by sessions, so the order is redone here to match the bar. */
+  const bySponsorPilots = [...d.sources].sort((a, b) => (b.visits - a.visits)
+    || (b.sessions - a.sessions)
+    || String(a.key).localeCompare(String(b.key)));
   sources.append(rankList({
-    rows: d.sources,
+    rows: bySponsorPilots,
     name: (r) => r.name || r.key,
-    value: (r) => r.visits || r.sessions,
+    value: (r) => r.visits,
     note: (r) => `${count(r.visits)} / ${count(r.laps)}`,
   }));
   sources.append(el('p', 'rank-more', 'Pilots / laps.'));
@@ -1008,6 +1058,7 @@ export function showStats(on) {
   const wasShown = view.shown;
   view.shown = Boolean(on);
   clearTimeout(view.timer);
+  clearInterval(view.fresh);
   if (!view.shown) {
     return;
   }
@@ -1017,6 +1068,7 @@ export function showStats(on) {
   } else {
     paintFresh();
   }
+  view.fresh = setInterval(paintFresh, 5000);
   tick();
 }
 
@@ -1025,10 +1077,12 @@ export function mountStats(url) {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(view.timer);
+      clearInterval(view.fresh);
       return;
     }
     if (view.shown) {
       refresh();
+      view.fresh = setInterval(paintFresh, 5000);
       tick();
     }
   });

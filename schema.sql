@@ -216,6 +216,6 @@ CREATE TABLE IF NOT EXISTS stats_dims (
   PRIMARY KEY (day, dim, key)
 );
 
--- The thirty day window is the page's default read, and it is a range scan
--- over a table whose row count grows with the days rather than the traffic.
-CREATE INDEX IF NOT EXISTS stats_dims_day ON stats_dims (day);
+-- No second index. The primary key leads on day, so the thirty day window
+-- the page reads is a range scan over the key that already exists, and a
+-- separate index on day would be a copy of its first column.

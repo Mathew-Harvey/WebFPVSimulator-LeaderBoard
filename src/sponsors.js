@@ -85,13 +85,15 @@ const RESERVED = new Set([SOURCE_DIRECT, SOURCE_OTHER]);
 const DEFAULT_SPONSORS = [];
 
 /* A display name is printed on a public page, so it is bounded and stripped
- * of anything that is not ordinary text. It reaches the DOM through
- * textContent either way; this is so a name cannot be a paragraph. */
+ * of control and format characters. It reaches the DOM through textContent
+ * either way; this is so a name cannot be a paragraph or carry a direction
+ * override. Letters of any alphabet stay: a sponsor called Café FPV is
+ * called that. */
 const NAME_MAX = 40;
 
 function cleanName(raw) {
   return String(raw ?? '')
-    .replace(/[^\x20-\x7e]/g, '')
+    .replace(/\p{C}/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, NAME_MAX);
