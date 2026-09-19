@@ -1035,3 +1035,213 @@ export function inspectRun(body) {
     },
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Site statistics                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * WHAT THE BOARD WILL BELIEVE ABOUT A VISIT, AND WHAT IT REFUSES TO HOLD.
+ *
+ * The statistics page counts sessions, laps, countries and returning
+ * pilots. Every one of those numbers is a COUNTER: the store adds to a
+ * daily total and keeps nothing that describes one browser. This function
+ * is the gate in front of that, and its job is smaller than it looks,
+ * because most of the privacy work is in what the wire format does not
+ * carry rather than in what is checked here.
+ *
+ * NOTHING IDENTIFYING IS ACCEPTED, so nothing identifying can be stored by
+ * mistake later. There is no field for an address, a user agent, a screen
+ * size, a referrer, a pilot name or a track id, and an event carrying one
+ * is not cleaned of it: the extra key is simply never read. The one string
+ * that travels per tab, `tab`, is a random value the browser makes fresh on
+ * every page load, is held in memory by the server for three minutes to
+ * answer "how many are flying now", and is never written to the store.
+ *
+ * EVERY DIMENSION IS A CLOSED LIST. A source folds to a sponsor slug or to
+ * `other`, a country to two capitals or to `ZZ`, and craft, map, input and
+ * surface are refused outright if they are not on the lists below. That is
+ * what stops a stranger with curl growing the dims table: the number of
+ * rows it can ever hold is the product of these lists and the days.
+ *
+ * THE DELTAS ARE SMALL AND BOUNDED. A flush covers at most a minute of
+ * flying, so thirty laps, ninety seconds and sixty crashes are all well
+ * past anything a minute can hold and far under anything worth inflating a
+ * public number with. A claim outside them is refused rather than clamped:
+ * clamping would store a number the sender did not send.
+ */
+
+export const STATS_KINDS = ['visit', 'session', 'flush'];
+
+/* Which page sent it. The landing page is on the list before it sends
+ * anything, because the board ships before the pages that talk to it and a
+ * surface the board refuses is a deploy order this repository already has
+ * a rule about. See DEPLOY.md in the simulator's repository. */
+export const STATS_SURFACES = ['sim', 'builder', 'board', 'landing'];
+
+/* The aircraft, spelled as the simulator's own settings spell it, so the
+ * page can print "Five inch" and "65 mm whoop" from a key that is not a
+ * translation of anything. */
+export const STATS_CRAFT = ['5inch', 'whoop65'];
+
+/* The maps the shell can be standing in. `custom` is the track, built or
+ * fetched; `city` is freestyle. Anything else folds, rather than being
+ * refused, because a map added to the simulator must not start refusing
+ * every session an older board sees. */
+export const STATS_MAPS = ['custom', 'city'];
+
+/* How the pilot is flying. The simulator knows a fourth thing, a radio in
+ * joystick mode, and reports it as `gamepad`, because to this page a radio
+ * and a controller are the same answer to "did they use sticks". */
+export const STATS_INPUTS = ['gamepad', 'keyboard', 'touch'];
+
+export const STATS_OTHER = 'other';
+export const STATS_COUNTRY_UNKNOWN = 'ZZ';
+
+/* One flush covers at most a minute. See the header. */
+const FLUSH_LAPS_MAX = 30;
+const FLUSH_FLIGHT_S_MAX = 90;
+const FLUSH_CRASHES_MAX = 60;
+
+/*
+ * The per tab handle, and the ONLY string in this format that is unique to
+ * a browser. It is `crypto.randomUUID()` from the page, it changes on every
+ * page load, the server holds it in memory for three minutes and no store
+ * ever sees it. The pattern is loose on purpose: it has to accept a UUID
+ * and it has no reason to insist on one, because nothing is derived from
+ * its shape. What it does insist on is a bound, so this cannot become a
+ * place to post a kilobyte.
+ */
+const STATS_TAB_RE = /^[A-Za-z0-9-]{8,36}$/;
+
+/*
+ * Two capitals from the edge, or ZZ.
+ *
+ * The board never looks an address up and never stores one. Cloudflare puts
+ * the country on the request in edge/router.js in the simulator's
+ * repository, and it is believed only when BOARD_TRUST_PROXY says something
+ * in front of this process sets it, exactly like the forwarded host. On a
+ * checkout, and on the bare Render address, every row is ZZ and the page
+ * prints Unknown, which is honest and needs no table.
+ *
+ * XX and T1 are Cloudflare's own answers for "no country" and "Tor exit",
+ * and both mean the same thing to this page as an absent header.
+ */
+export function normaliseCountry(raw) {
+  const code = String(raw ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code) || code === 'XX' || code === 'T1') {
+    return STATS_COUNTRY_UNKNOWN;
+  }
+  return code;
+}
+
+/* A word from a closed list, or `other`. Used where a new value in a newer
+ * simulator must not start refusing events on an older board. */
+function foldedTo(raw, list) {
+  const word = String(raw ?? '').trim();
+  return list.includes(word) ? word : STATS_OTHER;
+}
+
+/* A bounded whole number, or null. Absent counts as nought, because a flush
+ * with nothing to report is the heartbeat that answers "flying now" and
+ * refusing it would cost that number. */
+function delta(raw, max) {
+  if (raw == null) {
+    return 0;
+  }
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > max) {
+    return null;
+  }
+  return Math.round(raw);
+}
+
+/*
+ * Check one posted event. Returns { event } with exactly the fields the
+ * store will read, or { error } with a sentence.
+ *
+ * `sourceKey` is passed in rather than imported so this file keeps its one
+ * import and the sponsor list has exactly one home. The server hands it
+ * src/sponsors.js's fold; the tests hand it whichever fold they are
+ * checking against.
+ */
+export function inspectStatsEvent(body, sourceKey) {
+  if (!isObject(body)) {
+    return { error: 'That request was not a JSON object.' };
+  }
+  if (body.v !== 1) {
+    return { error: 'That is not a version of this format the board reads.' };
+  }
+  const kind = String(body.kind ?? '');
+  if (!STATS_KINDS.includes(kind)) {
+    return { error: 'That is not a kind of event this board counts.' };
+  }
+  const fold = typeof sourceKey === 'function' ? sourceKey : (x) => (x == null ? 'direct' : STATS_OTHER);
+  const source = fold(body.source);
+  if (kind === 'visit') {
+    const surface = String(body.surface ?? '');
+    if (!STATS_SURFACES.includes(surface)) {
+      return { error: 'That is not a page this board counts visits from.' };
+    }
+    /* The browser answers the question rather than sending the date it
+     * answered it from. A date would be a fingerprint; a boolean is not. */
+    if (typeof body.returning !== 'boolean') {
+      return { error: 'A visit says whether this browser has been here before.' };
+    }
+    return { event: { kind, surface, returning: body.returning, source } };
+  }
+  if (kind === 'session') {
+    const craft = String(body.craft ?? '');
+    if (!STATS_CRAFT.includes(craft)) {
+      return { error: 'That is not an aircraft this board counts.' };
+    }
+    return {
+      event: {
+        kind,
+        craft,
+        map: foldedTo(body.map, STATS_MAPS),
+        input: foldedTo(body.input, STATS_INPUTS),
+        source,
+      },
+    };
+  }
+  /* A flush. */
+  const tab = String(body.tab ?? '');
+  if (!STATS_TAB_RE.test(tab)) {
+    return { error: 'That is not a usable tab handle.' };
+  }
+  const craft = String(body.craft ?? '');
+  if (!STATS_CRAFT.includes(craft)) {
+    return { error: 'That is not an aircraft this board counts.' };
+  }
+  const laps = delta(body.laps, FLUSH_LAPS_MAX);
+  const flightS = delta(body.flightS, FLUSH_FLIGHT_S_MAX);
+  const crashes = delta(body.crashes, FLUSH_CRASHES_MAX);
+  if (laps == null || flightS == null || crashes == null) {
+    return { error: 'That is more than a minute of flying can hold.' };
+  }
+  return {
+    event: {
+      kind,
+      tab,
+      craft,
+      map: foldedTo(body.map, STATS_MAPS),
+      laps,
+      flightS,
+      crashes,
+      source,
+    },
+  };
+}
+
+/*
+ * The UTC day a write belongs to, as the text the store keys on.
+ *
+ * The SERVER's day, never the client's. A browser's clock is wrong often
+ * enough that letting it name the day would put laps in tomorrow, and it
+ * would be one more thing an event could claim. UTC, so that the day
+ * boundary does not move when a host changes region, which is a thing
+ * Render deploys do.
+ */
+export function statsDay(now = new Date()) {
+  return new Date(now).toISOString().slice(0, 10);
+}

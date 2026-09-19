@@ -35,6 +35,7 @@
  */
 
 import { guessSimOrigin as guess, landingOrigin as frontDoor } from './origins.js';
+import { mountStats, pingVisit, showStats } from './stats.js';
 import { fillCredits } from './credits.js';
 import {
   fieldSize, paintPlans, planCanvas, planLabel,
@@ -1240,7 +1241,9 @@ function paintCraftCounts() {
  */
 const ADMIN_KEY = 'webfpv.board.admin.v1';
 
-const admin = { token: '', email: '', kind: '', expiresUtc: '' };
+const admin = {
+  token: '', email: '', kind: '', expiresUtc: '', sponsors: [],
+};
 
 function readAdminToken() {
   try {
@@ -1302,6 +1305,7 @@ function forgetAdmin() {
   admin.email = '';
   admin.kind = '';
   admin.expiresUtc = '';
+  admin.sponsors = [];
   writeAdminToken('');
   paintAdmin();
 }
@@ -1322,6 +1326,59 @@ function paintAdminButton() {
 
 /* The panel's two faces, and the track sheet's control, all follow from one
  * fact, so they are painted together and never separately. */
+/*
+ * The sponsors, and the link each one is given.
+ *
+ * It lives in the admin panel rather than on the statistics tab because the
+ * LIST is the set of sponsors including the ones with no traffic yet, which
+ * is a commercial fact. The numbers per sponsor are public on that tab, so
+ * a sponsor can check them without asking anybody.
+ *
+ * Copy rather than a mailto or a download: the one thing anybody does with
+ * this is paste it into an email, and the clipboard is one press away.
+ */
+function paintAdminSponsors() {
+  const host = byId('admin-sponsors');
+  if (!host) {
+    return;
+  }
+  host.textContent = '';
+  host.hidden = !signedIn();
+  if (!signedIn()) {
+    return;
+  }
+  host.append(el('h3', null, 'Sponsor links'));
+  const rows = admin.sponsors || [];
+  if (!rows.length) {
+    host.append(el('p', null, 'No sponsors are set on this board. BOARD_SPONSORS names them, one slug and name per line.'));
+    return;
+  }
+  host.append(el('p', null, 'Each link lands in the simulator and is counted under that sponsor on the statistics tab, for thirty days after somebody follows it.'));
+  for (const sponsor of rows) {
+    const row = el('div', 'sponsor-row');
+    row.append(el('span', 'sponsor-name', sponsor.name || sponsor.slug));
+    row.append(el('span', 'sponsor-link', sponsor.link || ''));
+    const copy = el('button', 'btn small', 'Copy');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(sponsor.link || '');
+        copy.textContent = 'Copied';
+      } catch (e) {
+        /* No clipboard permission, or an insecure origin. The link is on
+         * screen and can be selected, so this says so rather than failing
+         * silently. */
+        copy.textContent = 'Select it';
+      }
+      setTimeout(() => {
+        copy.textContent = 'Copy';
+      }, 1600);
+    });
+    row.append(copy);
+    host.append(row);
+  }
+}
+
 function paintAdmin() {
   paintAdminButton();
   const form = byId('admin-signin');
@@ -1343,6 +1400,7 @@ function paintAdmin() {
       ? `This sign in runs out ${when}, and closing this tab ends it sooner.`
       : 'Closing this tab ends this sign in.';
   }
+  paintAdminSponsors();
   const track = state.openId ? courseById(state.openId) : null;
   if (track) {
     paintSheetAdmin(track);
@@ -1372,6 +1430,7 @@ async function signIn(email, password) {
   admin.email = body.email || '';
   admin.kind = 'session';
   admin.expiresUtc = body.expiresUtc || '';
+  admin.sponsors = Array.isArray(body.sponsors) ? body.sponsors : [];
   writeAdminToken(admin.token);
   paintAdmin();
 }
@@ -1396,6 +1455,7 @@ async function restoreAdmin() {
     admin.email = body.email || '';
     admin.kind = body.kind || 'session';
     admin.expiresUtc = body.expiresUtc || '';
+    admin.sponsors = Array.isArray(body.sponsors) ? body.sponsors : [];
     paintAdmin();
   } catch (e) {
     /* adminFetch has already dropped it and repainted if the board said no.
@@ -1862,8 +1922,50 @@ function clearHash() {
 /* Routing. A track is an address, so it can be linked and shared.    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * WHICH TAB IS SHOWING, and it is decided by the address rather than by a
+ * click, so a pasted #stats lands on the statistics and a reload stays put.
+ *
+ * The aircraft switch belongs to the tracks tab alone: it chooses which
+ * tracks are listed and means nothing beside a page of counters, so it is
+ * hidden with the section it governs rather than standing above both.
+ */
+function showTab(name) {
+  const stats = name === 'stats';
+  const tracks = byId('view-tracks');
+  const board = byId('view-stats');
+  const craft = byId('craftswitch');
+  if (tracks) {
+    tracks.hidden = stats;
+  }
+  if (board) {
+    board.hidden = !stats;
+  }
+  if (craft) {
+    craft.hidden = stats;
+  }
+  for (const [id, on] of [['tab-tracks', !stats], ['tab-stats', stats]]) {
+    const tab = byId(id);
+    if (!tab) {
+      continue;
+    }
+    tab.classList.toggle('is-on', on);
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    /* One tab stop for the row, which is how a tablist is meant to work:
+     * Tab reaches the chosen tab and the arrow keys move between them. */
+    tab.tabIndex = on ? 0 : -1;
+  }
+  showStats(stats);
+}
+
 function route() {
   const hash = location.hash;
+  if (hash === '#stats') {
+    closeSheets();
+    showTab('stats');
+    return;
+  }
+  showTab('tracks');
   if (hash === '#credits') {
     /* Old bookmarks, and the three Credits links before bindLinks ran,
      * used to open an overlay copy of the roll. Take this tab to the
@@ -2073,6 +2175,44 @@ function watchOrbit() {
   });
 }
 
+/*
+ * The arrow keys walk the tab row, which is what a tablist promises and the
+ * one thing an anchor does not do on its own. Home and End as well, because
+ * a two tab row still costs nothing to get right and a third tab would
+ * arrive with this already working.
+ */
+function bindTabs() {
+  const row = byId('tabs');
+  if (!row) {
+    return;
+  }
+  const tabs = [...row.querySelectorAll('[role="tab"]')];
+  row.addEventListener('keydown', (e) => {
+    const at = tabs.indexOf(document.activeElement);
+    if (at < 0) {
+      return;
+    }
+    let next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      next = (at + 1) % tabs.length;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      next = (at - 1 + tabs.length) % tabs.length;
+    } else if (e.key === 'Home') {
+      next = 0;
+    } else if (e.key === 'End') {
+      next = tabs.length - 1;
+    }
+    if (next < 0) {
+      return;
+    }
+    e.preventDefault();
+    /* Follow the link as well as move the focus. These are addresses, so
+     * choosing one is a navigation and not a widget state. */
+    tabs[next].focus();
+    tabs[next].click();
+  });
+}
+
 function watchKeys() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -2083,7 +2223,10 @@ function watchKeys() {
         closeAdmin();
         return;
       }
-      if (location.hash) {
+      /* A tab address is not something Escape should undo: somebody
+       * reading the statistics has not opened anything to close, and
+       * clearing the hash would move them to the tracks under their eyes. */
+      if (location.hash && location.hash !== '#stats' && location.hash !== '#tracks') {
         clearHash();
       }
       return;
@@ -2143,6 +2286,29 @@ async function start() {
    */
   bindAdmin();
   restoreAdmin();
+  /*
+   * THE STATISTICS TAB IS BOUND HERE FOR THE SAME REASON THE ADMIN BUTTON
+   * IS: it has to work on a board with nothing published and on a board
+   * whose list request just failed, and those are two of the states
+   * somebody opens it in. Both of the early returns below are past this.
+   *
+   * pingVisit is the board's own arrival, counted once per browser per day
+   * across all three pages, and it captures a sponsor slug out of the query
+   * on the way past. It talks to nothing when the pilot has opted out or
+   * their browser sends Global Privacy Control. It is deliberately not
+   * awaited: nothing on this page waits for a counter.
+   */
+  mountStats(here('api/stats'));
+  bindTabs();
+  pingVisit(here('api/stats/events'), 'board');
+  /*
+   * And routed now, not only at the end. The two returns below leave on an
+   * empty board and on a failed list, and a visitor who followed a #stats
+   * link into either of those would have been shown the tracks tab with
+   * nothing on it. route() runs again at the end, where the tracks exist
+   * and a #track= link has something to open.
+   */
+  route();
 
   const list = byId('list');
   const notice = byId('notice');

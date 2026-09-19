@@ -3,6 +3,12 @@
 The public board for [WebFPVSimulator](https://github.com/Mathew-Harvey/WebFPVSimulator).
 Every published course lives here, with the times flown on it.
 
+The page has two tabs. **Tracks and times** is the board itself. **Site
+statistics** is a page of counters about the product: how many are flying
+now, pilots and laps by day, which countries, which sponsors' links people
+arrived from, and what they fly on. See [Site statistics](#site-statistics)
+below for what is counted and, more to the point, what is not.
+
 Repository: [Mathew-Harvey/WebFPVSimulator-LeaderBoard](https://github.com/Mathew-Harvey/WebFPVSimulator-LeaderBoard).
 
 The simulator itself keeps nothing. Tracks you build stay in that browser
@@ -122,6 +128,8 @@ to create things in, is in
 | POST | `/api/admin/login` | Sign in `{ email, password }`, get a session token |
 | GET | `/api/admin/session` | Who the bearer token is, or a 401 |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
+| POST | `/api/stats/events` | Add one counted event. Answers 204 and stores no identifier |
+| GET | `/api/stats` | The statistics page's numbers. Cached twenty seconds |
 | POST | `/api/bugs` | Tester submit `{ kind, title, what, expected?, steps?, reporter?, context? }` |
 | GET | `/api/bugs` | Ticket summaries, newest first. `?status=open` `?kind=visual` |
 | GET | `/api/bugs/:id` | One full ticket, context included |
@@ -218,6 +226,82 @@ that posts it. The board validates the header against that format,
 mirrored in `src/validate.js`, and refuses a blob that does not match the
 lap time beside it. Times posted with a ghost show a mint chase link on
 the board, and the simulator's Ghost row lists them as rivals.
+
+## Site statistics
+
+The second tab. It is **counters, never events**: the store holds one row
+per UTC day and one row per day per dimension, and that is the finest grain
+there is. There is no row anywhere in this repository that describes one
+visitor, one visit or one lap.
+
+What is stored, in `stats_days` and `stats_dims`:
+
+| Counted | Where it comes from |
+| --- | --- |
+| Pilots, new and returning | one visit per browser per UTC day, from any of the three pages |
+| Sessions | a simulator page load where the quad left the launch stand |
+| Laps, flight time, crashes | deltas the simulator flushes once a minute |
+| Country | two letters put on the request by the edge, never looked up here |
+| Source | `direct`, a sponsor's slug, or `other` |
+| Aircraft, input, map | the session that reported them |
+
+What is **not** stored, and has no field in the wire format to arrive in: an
+address, a user agent, a referrer, a screen size, a pilot name, a track id,
+or any timestamp finer than the day. No cookie is set. The one per tab
+string, used to answer "how many are flying now", is a random value the
+browser makes at page load; the server holds it in memory for three minutes
+and no table ever sees it.
+
+New or returning is decided **by the browser**, from a first seen date it
+keeps in its own local storage under `webfpv.stats.v1`. It sends the answer,
+not the date.
+
+Every dimension is a closed list, which is what stops a stranger with curl
+growing a public table: `src/validate.js` refuses an aircraft or a page it
+does not know, folds an unknown map or input into `other`, and
+`src/sponsors.js` folds an unknown source into `other`. A flush is bounded
+to what a minute can hold.
+
+Turning it off. The page carries a **Count this browser** switch, and a
+browser sending [Global Privacy
+Control](https://globalprivacycontrol.org/) is never counted: the client
+checks `navigator.globalPrivacyControl` and sends nothing, and the server
+checks the `Sec-GPC` header and stores nothing.
+
+### Sponsor links
+
+`BOARD_SPONSORS` names them. One entry per line or comma separated:
+
+```
+BOARD_SPONSORS=rotorriot:Rotor Riot,fpvshop:The FPV Shop
+```
+
+A signed in admin sees each sponsor's ready link in the Admin panel:
+
+```
+{sim}/?utm_source=rotorriot&utm_medium=sponsor
+```
+
+The slug is what travels and must not change once a poster is printed; the
+name is what the page prints and can. A visitor following one has the slug
+stored in their own browser for thirty days and it rides on their events as
+one of a handful of known words. Every `utm_` parameter is stripped from the
+address bar on arrival, so a pilot who shares the link they are looking at
+does not attribute their friend to a poster they never saw.
+
+Unset is the right default and means no sponsors: every arrival is `direct`
+or `other`. The per sponsor numbers are public on the statistics tab, on
+purpose, so a sponsor can check them without asking anybody. The list of
+sponsors is not, because it includes the ones with no traffic yet.
+
+### The country
+
+`edge/router.js` in the simulator's repository puts `x-webfpv-country` on
+the request from Cloudflare's own `request.cf.country`. The board believes
+it only when `BOARD_TRUST_PROXY` is `1`, exactly like the forwarded host, so
+a directly exposed instance cannot be told where its visitors are. On a
+checkout and on the bare Render address every row is `ZZ` and the page
+prints Unknown.
 
 ## Bug tickets
 

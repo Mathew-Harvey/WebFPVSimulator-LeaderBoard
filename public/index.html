@@ -1,6 +1,12 @@
 <!doctype html>
 <!--
-  Tracks and Times. Every published track, and the times flown on it.
+  Tracks and Statistics. Two tabs. Every published track with the times
+  flown on it, and a page of counters for the site itself.
+
+  THE STATISTICS TAB IS COUNTERS, NOT RECORDS. Nothing it reads describes
+  one visitor: the store holds a total per UTC day and a total per day per
+  dimension, and that is the finest grain there is. See schema.sql and
+  src/validate.js, which is where the promise is kept rather than made.
 
   Same chrome as the simulator: system fonts, cream for lit type, sakura
   for chrome, mint for a record, amber for instruments, cool mist for
@@ -28,7 +34,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tracks and Times, WebFPV</title>
+    <title>Tracks and Statistics, WebFPV</title>
     <meta name="description" content="Every published WebFPV track, and the lap times flown on it." />
     <!--
       A link to this page posted anywhere renders a 1200 by 630 card, and
@@ -45,7 +51,7 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="WebFPV" />
     <meta property="og:url" content="https://webfpv.org/board/" />
-    <meta property="og:title" content="Tracks and Times, WebFPV" />
+    <meta property="og:title" content="Tracks and Statistics, WebFPV" />
     <meta property="og:description" content="Every published WebFPV track, and the lap times flown on it. Pick one, fly it, and see where you land." />
     <meta property="og:image" content="https://webfpv.org/board/og.png" />
     <meta property="og:image:type" content="image/png" />
@@ -53,7 +59,7 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and track markers running away under a low sun." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Tracks and Times, WebFPV" />
+    <meta name="twitter:title" content="Tracks and Statistics, WebFPV" />
     <meta name="twitter:description" content="Every published WebFPV track, and the lap times flown on it. Pick one, fly it, and see where you land." />
     <meta name="twitter:image" content="https://webfpv.org/board/og.png" />
     <meta name="twitter:image:alt" content="The race field in the WebFPV simulator: a lit start gate on mown grass, a five inch quad parked beside it, flags and track markers running away under a low sun." />
@@ -1779,6 +1785,417 @@
       footer a { color: var(--slate); text-decoration: none; }
       footer a:hover { color: var(--sakura); }
 
+
+      /* ---------------------------------------------------------------
+         The two tabs.
+
+         Shaped like the aircraft switch below them, because they are the
+         same gesture at a different altitude: two plates, one always
+         chosen, and the chosen one lit rather than outlined. The mint top
+         rule is the difference, and it is deliberate that it is not sakura:
+         sakura is this page's chrome, and a chosen tab is not chrome.
+         --------------------------------------------------------------- */
+      .tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin: 4px 0 20px;
+      }
+      .tab {
+        display: block;
+        padding: 12px 16px 13px;
+        background: var(--sunk);
+        border-top: 2px solid rgba(157, 179, 200, 0.22);
+        border-radius: var(--radius);
+        box-shadow: inset 0 0 0 1px var(--line);
+        color: var(--slate);
+        text-decoration: none;
+        transition: color 140ms ease, background-color 140ms ease,
+          border-top-color 140ms ease;
+      }
+      .tab:hover { color: var(--cream); }
+      .tab.is-on {
+        background: var(--panel);
+        border-top-color: var(--mint);
+        color: var(--cream);
+      }
+      .tab-name {
+        display: block;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--cream);
+      }
+      .tab-note {
+        display: block;
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .tab.is-on .tab-note { color: var(--slate); }
+      @media (max-width: 719px) {
+        .tabs { gap: 8px; margin-bottom: 16px; }
+        .tab { padding: 10px 12px 11px; }
+        .tab-name { font-size: 15px; }
+        .tab-note { display: none; }
+      }
+
+      /* ---------------------------------------------------------------
+         The statistics tab.
+         --------------------------------------------------------------- */
+      #view-stats[hidden] { display: none; }
+      #view-tracks[hidden] { display: none; }
+
+      .stats-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+      .stats-head h2 { margin: 8px 0 0; font-size: 22px; }
+      .stats-lede {
+        margin: 12px 0 0;
+        max-width: 46em;
+        color: var(--slate);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .stats-fresh {
+        margin: 0;
+        color: var(--dim);
+        font-size: 12px;
+        line-height: 1.5;
+        text-align: right;
+      }
+      .stats-fresh.stale { color: var(--amber); }
+
+      /* A failed poll holds the last good render rather than throwing it
+         away for a skeleton: one missed request should not empty a page of
+         numbers that were right thirty seconds ago. Dimmed, so nobody reads
+         a stale figure as a live one, with the line above saying how old. */
+      #view-stats.stale .tiles,
+      #view-stats.stale .stats-plate:not(.stats-privacy) { opacity: 0.55; }
+
+      .stats-plate { padding: 18px 20px 20px; margin-bottom: 18px; }
+      .stats-plate[hidden] { display: none; }
+      .stats-plate h3 {
+        margin: 8px 0 2px;
+        font-size: 17px;
+        font-weight: 700;
+        color: var(--cream);
+      }
+      .stats-plate .plate-note {
+        margin: 6px 0 16px;
+        color: var(--slate);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .stats-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        align-items: start;
+      }
+      .stats-row[hidden] { display: none; }
+      .stats-row .stats-plate { margin-bottom: 18px; }
+      @media (max-width: 1079px) {
+        .stats-row { grid-template-columns: 1fr; gap: 0; }
+      }
+
+      /* The four tiles. PROPORTIONAL figures, not the tabular mono the rest
+         of this page sets numbers in, and that is not an oversight: mono
+         tabular gives every digit the width of a nought, which reads loose
+         at display size. A lap time is a measurement and wears mono; a
+         count is not and does not. */
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      @media (max-width: 899px) {
+        .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      .tile-stat {
+        padding: 14px 16px 16px;
+        background: var(--panel);
+        border-top: 2px solid var(--edge);
+        border-radius: var(--radius);
+        box-shadow: inset 0 0 0 1px var(--line);
+      }
+      .tile-stat .tile-label {
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+      }
+      .tile-stat .tile-value {
+        display: block;
+        margin-top: 10px;
+        font-family: var(--ui);
+        font-variant-numeric: proportional-nums lining-nums;
+        font-size: 32px;
+        font-weight: 650;
+        line-height: 1;
+        color: var(--cream);
+      }
+      /* Flying now is an instrument reading rather than a total, and amber
+         is what this product paints an instrument in. */
+      .tile-stat.live { border-top-color: var(--amber); }
+      .tile-stat.live .tile-label { color: var(--amber); }
+      .tile-stat.live .tile-value { color: var(--amber); }
+      .tile-stat .tile-note {
+        display: block;
+        margin-top: 8px;
+        color: var(--slate);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .tile-stat .tile-note:empty { display: none; }
+
+      /* The charts. Measured and drawn at real pixels rather than scaled
+         from a fixed viewBox, so a ten pixel axis label is ten pixels on a
+         phone as well as on a desktop. paintStats redraws on resize. */
+      .chart-wrap { position: relative; margin-bottom: 6px; }
+      .chart-wrap:last-of-type { margin-bottom: 0; }
+      .chart-title {
+        margin: 0 0 6px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--cream);
+      }
+      .chart-wrap svg { display: block; width: 100%; }
+      .chart-wrap svg .bar-hit { fill: transparent; outline: none; }
+      .chart-wrap svg .bar-hit:focus-visible { fill: rgba(232, 168, 184, 0.16); }
+      .chart-tip {
+        position: absolute;
+        z-index: 3;
+        min-width: 150px;
+        padding: 9px 11px;
+        background: #0c120d;
+        border: 1px solid var(--edge);
+        border-radius: 3px;
+        box-shadow: 0 10px 22px rgba(0, 0, 0, 0.5);
+        color: var(--cream);
+        font-size: 12px;
+        line-height: 1.45;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 90ms ease;
+      }
+      .chart-tip.on { opacity: 1; }
+      .chart-tip b { display: block; margin-bottom: 4px; color: var(--cream); }
+      .chart-tip span { color: var(--slate); }
+      .chart-tip i {
+        font-style: normal;
+        float: right;
+        margin-left: 14px;
+        font-family: var(--mono);
+        color: var(--cream);
+      }
+
+      /* The table twin. Every chart has one, and it is where a value goes
+         when a tooltip is not available: print, a screen reader, or
+         somebody who simply wants the numbers. */
+      .chart-table {
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+      .chart-table summary {
+        cursor: pointer;
+        color: var(--slate);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .chart-table summary:hover { color: var(--sakura); }
+      .chart-table .scroll { max-height: 280px; overflow: auto; margin-top: 10px; }
+      .chart-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .chart-table th, .chart-table td {
+        padding: 5px 8px;
+        text-align: right;
+        border-bottom: 1px solid var(--line);
+        font-variant-numeric: tabular-nums lining-nums;
+      }
+      .chart-table th { color: var(--sakura); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+      .chart-table th:first-child, .chart-table td:first-child { text-align: left; }
+      .chart-table td { color: var(--slate); font-family: var(--mono); }
+      .chart-table td:first-child { font-family: var(--ui); color: var(--cream); }
+
+      /* A ranked list: a name, a bar and the numbers. One hue, because the
+         rows are one series measured one way, and length already says which
+         is bigger. */
+      .rank { margin: 0; padding: 0; list-style: none; }
+      .rank li { margin-bottom: 9px; }
+      .rank li:last-child { margin-bottom: 0; }
+      .rank-top {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 4px;
+      }
+      .rank-name {
+        font-size: 13px;
+        color: var(--cream);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rank-value {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--slate);
+        white-space: nowrap;
+      }
+      .rank-track {
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(157, 179, 200, 0.12);
+        overflow: hidden;
+      }
+      .rank-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: var(--slate);
+      }
+      /* Unknown is not a place that did worse than Australia: it is the rows
+         the edge could not name. It sits under a rule, unranked and quiet. */
+      .rank li.unknown { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+      .rank li.unknown .rank-name { color: var(--dim); }
+      .rank li.unknown .rank-fill { background: var(--dim); }
+      .rank-more { margin: 12px 0 0; color: var(--dim); font-size: 12px; }
+      /* The countries that did not make the ranking, sitting where they
+         belong: after the ranked ones and before the unranked Unknown. */
+      .rank-rest { color: var(--dim); font-size: 12px; margin-bottom: 9px; }
+      .rank-group { margin-bottom: 18px; }
+      .rank-group:last-child { margin-bottom: 0; }
+      .rank-group h4 {
+        margin: 0 0 9px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+      }
+
+      /* All time. One hero figure on this tab and this is it. Sans, for the
+         same reason the tiles are: a display sized number with every digit
+         a nought wide reads loose. */
+      .alltime {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 26px 40px;
+      }
+      /* The facts are their own grid rather than more flex children, so a
+         row that does not divide evenly wraps into a tidy second row
+         instead of orphaning one number under the hero. */
+      /* FOUR columns, not auto-fit. There are eight of these and auto-fit
+         fitted seven across, which left the eighth on a row of its own
+         under the hero looking like a mistake. Four is two clean rows. */
+      .facts {
+        flex: 1 1 420px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 20px 24px;
+      }
+      @media (max-width: 719px) {
+        .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      .hero-box { flex: 0 0 auto; }
+      .hero {
+        font-family: var(--ui);
+        font-variant-numeric: proportional-nums lining-nums;
+        font-size: 52px;
+        font-weight: 650;
+        line-height: 0.95;
+        color: var(--mint);
+      }
+      .hero-label {
+        display: block;
+        margin-top: 8px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+      }
+      .fact { min-width: 84px; }
+      .fact-value {
+        display: block;
+        font-family: var(--ui);
+        font-variant-numeric: proportional-nums lining-nums;
+        font-size: 22px;
+        font-weight: 650;
+        color: var(--cream);
+        line-height: 1;
+      }
+      .fact-label {
+        display: block;
+        margin-top: 6px;
+        color: var(--dim);
+        font-size: 11px;
+      }
+
+      /* What this counts. */
+      .stats-privacy p {
+        margin: 0 0 12px;
+        max-width: 54em;
+        color: var(--slate);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .stats-optout { margin-top: 16px; }
+      .optout-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .optout-row input { width: 16px; height: 16px; accent-color: var(--mint); margin: 0; }
+      .optout-row label { color: var(--cream); font-size: 13px; font-weight: 600; cursor: pointer; }
+      .optout-said { margin: 0; color: var(--mint); font-size: 13px; line-height: 1.6; }
+      .optout-note { margin: 8px 0 0; color: var(--dim); font-size: 12px; line-height: 1.55; }
+
+      /* The sponsors, in the admin panel. */
+      .admin-sponsors { margin-top: 18px; }
+      .admin-sponsors[hidden] { display: none; }
+      .admin-sponsors h3 {
+        margin: 0 0 4px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--sakura);
+      }
+      .admin-sponsors p { margin: 0 0 12px; color: var(--slate); font-size: 12px; line-height: 1.55; }
+      .sponsor-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
+      }
+      .sponsor-name { font-size: 13px; color: var(--cream); min-width: 110px; }
+      .sponsor-link {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--slate);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       /* The global half of the reduced motion contract. The one animation
          it cannot reach is a GIF, which no stylesheet can stop, so a card
          that would carry one draws its plan instead. See paintTile. */
@@ -1816,7 +2233,7 @@
           leaving open behind it is not one.
         -->
         <h1><a class="home" id="brand-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a></h1>
-        <div class="eyebrow">Tracks and times</div>
+        <div class="eyebrow">Tracks and statistics</div>
         <p class="invite">
           Every published track, and the times flown on it. Open one, fly it in
           the browser, and post a lap under your name.
@@ -1866,6 +2283,7 @@
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
           <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
+          <a class="text" href="#stats">Statistics</a>
           <a class="text" id="spine-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
         </nav>
       </div>
@@ -1901,6 +2319,34 @@
       dialog and a fifth would stay tabbable behind the modal.
     -->
     <main id="tracks">
+      <!--
+        TWO TABS, AND EACH ONE IS AN ADDRESS.
+        This page holds two things now, and they are not filters of each
+        other: the tracks with their times, and a page of counters about the
+        site. A tab is a real anchor carrying a real hash, so both are
+        linkable, both survive a reload, and the back button walks between
+        them. #tracks is the address of this element and was already the
+        skip link's target, so the first tab costs no new vocabulary.
+        role="tablist" over anchors: a screen reader is told these are tabs
+        and which is chosen, and a pointer is still handed a link it can
+        open, copy or bookmark. route() in app.js is what actually swaps
+        them, driven by hashchange, so a pasted #stats works with no click.
+        Bound before the two early returns in start(), because the statistics
+        tab has to open on a board with no tracks and on a board whose list
+        request failed, which are exactly the two states somebody opens it in.
+      -->
+      <nav class="tabs" id="tabs" role="tablist" aria-label="What this page shows">
+        <a class="tab is-on" id="tab-tracks" role="tab" href="#tracks"
+           aria-selected="true" aria-controls="view-tracks">
+          <span class="tab-name">Tracks and times</span>
+          <span class="tab-note">Every published track, and the laps flown on it</span>
+        </a>
+        <a class="tab" id="tab-stats" role="tab" href="#stats"
+           aria-selected="false" aria-controls="view-stats" tabindex="-1">
+          <span class="tab-name">Site statistics</span>
+          <span class="tab-note">Who is flying, where from, and on what</span>
+        </a>
+      </nav>
       <nav class="switch switch-craft" id="craftswitch" aria-label="Which aircraft">
         <button type="button" class="switch-btn is-on" id="craft-full" aria-pressed="true">
           <span class="switch-kicker">Five inch</span>
@@ -1956,18 +2402,71 @@
           <aside class="rail" id="rail" hidden aria-label="Standings"></aside>
         </div>
       </section>
+      <!--
+        THE STATISTICS TAB.
+        Almost all of it is painted by public/stats.js from one request, so
+        what is written here is the furniture that must exist without
+        JavaScript and the prose that must be readable whether the numbers
+        arrive or not. The plate at the foot is the important one: what this
+        counts, in plain words, with the switch that turns it off.
+      -->
+      <section id="view-stats" aria-label="Site statistics" hidden>
+        <div class="stats-head">
+          <div>
+            <div class="kicker">The site</div>
+            <h2 class="rule-after" id="stats-title">Site statistics</h2>
+            <p class="stats-lede">
+              Counted from the simulator, the track builder and this page.
+              Every number here is a total. Days are UTC.
+            </p>
+          </div>
+          <!-- role="status" rather than role="alert": it changes every
+               thirty seconds and nobody should be interrupted for it. -->
+          <p class="stats-fresh" id="stats-fresh" role="status"></p>
+        </div>
+        <div class="tiles" id="stats-tiles"></div>
+        <div id="stats-notice"></div>
+        <div class="panel stats-plate" id="stats-trend" hidden></div>
+        <div class="stats-row" id="stats-row" hidden>
+          <div class="panel stats-plate" id="stats-countries"></div>
+          <div class="panel stats-plate" id="stats-sources"></div>
+          <div class="panel stats-plate" id="stats-how"></div>
+        </div>
+        <div class="panel stats-plate" id="stats-alltime" hidden></div>
+        <div class="panel stats-plate stats-privacy">
+          <div class="kicker">What this counts</div>
+          <h3>Nothing here is about you</h3>
+          <p>
+            Every number on this page is a count. The simulator tells this
+            board that a session started, that laps were flown, and which
+            aircraft and input were used. The board adds one to a daily total
+            and keeps nothing else.
+          </p>
+          <p>
+            No cookie is set. No address is stored: the edge in front of the
+            site names a country from it, and only the two letter code
+            arrives here. New or returning is worked out by your browser from
+            a date it keeps for itself, and no identifier ever leaves it. A
+            sponsor link is remembered as one word for thirty days, so the
+            board can say which poster somebody walked past, never who they
+            are. Days are UTC.
+          </p>
+          <div class="stats-optout" id="stats-optout"></div>
+        </div>
+      </section>
     </main>
 
 
 
     <footer>
       <p>
-        WebFPV Tracks and Times. Every published track and every named time
-        lives here. The simulator itself keeps nothing: a track you build stays
+        WebFPV Tracks and Statistics. Every published track and every named
+        time lives here. The simulator itself keeps nothing: a track you build stays
         in your browser until you publish it. Free software under GPLv3.
       </p>
       <nav>
         <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
+        <a href="#stats">Site statistics</a>
         <a href="bugs.html">Bugs and feedback</a>
         <a id="foot-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
       </nav>
@@ -2066,6 +2565,13 @@
           <p class="admin-warn">
             Removing a track cannot be undone. The times go with it.
           </p>
+          <!-- The sponsors and their links. Filled by app.js from the
+               signed in response, which is the only place the list travels:
+               the slugs are public the moment a poster is printed, but the
+               list of sponsors INCLUDING the ones with no traffic yet is a
+               commercial fact rather than a public one. The per sponsor
+               numbers on the statistics tab are public on purpose. -->
+          <div class="admin-sponsors" id="admin-sponsors"></div>
           <div class="admin-actions">
             <button type="button" class="btn" id="admin-signout">Sign out</button>
           </div>

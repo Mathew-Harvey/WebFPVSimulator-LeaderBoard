@@ -26,7 +26,9 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { creditOf, hashEditKey, planFromDocument, trackClassOf } from './validate.js';
+import {
+  creditOf, hashEditKey, planFromDocument, trackClassOf, STATS_COUNTRY_UNKNOWN,
+} from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -242,7 +244,120 @@ function summaryRun(row) {
 
 function emptyFile() {
   return {
-    tracks: {}, times: {}, bugs: {}, runs: [],
+    tracks: {}, times: {}, bugs: {}, runs: [], stats: { days: {}, dims: {} },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Site statistics: counters, never events                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The shared half of the two stores' statistics. Both backends hold the
+ * same two tables in their own way, so the SHAPE of the answer is written
+ * once here and each backend only has to produce the rows.
+ *
+ * Nothing in this section can answer a question about one browser, because
+ * nothing in either table is about one browser. See the header of the
+ * stats_days table in schema.sql.
+ */
+
+export function emptyStatsDay(day) {
+  return {
+    day,
+    visits: 0,
+    newVisitors: 0,
+    returningVisitors: 0,
+    sessions: 0,
+    laps: 0,
+    flightS: 0,
+    crashes: 0,
+  };
+}
+
+/* The window's days, oldest first, ending today. Built from the day
+ * strings rather than from Date arithmetic across a DST boundary, which is
+ * a bug this sort of code has by default: UTC midnight plus 24 hours is
+ * always the next UTC day. */
+export function statsDayKeys(now, count) {
+  const end = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00Z`);
+  const out = [];
+  for (let i = count - 1; i >= 0; i -= 1) {
+    out.push(new Date(end - i * 86_400_000).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+/*
+ * Rank a dimension's rows. Sessions first, because a session is the number
+ * the page is ranking by; then visits, then laps, then the key, so the
+ * order is stable when a young board has ties everywhere.
+ *
+ * ZZ is forced to the foot and never ranked. "Unknown" is not a country
+ * that did better or worse than Australia: it is the rows the edge could
+ * not name, and printing it third would read as a place.
+ */
+function byDimRow(a, b) {
+  if ((a.key === STATS_COUNTRY_UNKNOWN) !== (b.key === STATS_COUNTRY_UNKNOWN)) {
+    return a.key === STATS_COUNTRY_UNKNOWN ? 1 : -1;
+  }
+  return (b.sessions - a.sessions)
+    || (b.visits - a.visits)
+    || (b.laps - a.laps)
+    || String(a.key).localeCompare(String(b.key));
+}
+
+/*
+ * Assemble what GET /api/stats answers with, from rows either backend can
+ * produce.
+ *
+ * `dayRows` is a Map from day string to a row; a day nobody visited is
+ * simply absent and is zero filled here, so the chart always has the same
+ * number of bars and a quiet Sunday is a gap in the line rather than a
+ * missing tick. `dimRows` is already summed over the window.
+ */
+export function shapeStats({
+  now, days, dayRows, dimRows, allTime, firstDay, countriesAllTime,
+}) {
+  const keys = statsDayKeys(now, days);
+  const series = keys.map((day) => dayRows.get(day) || emptyStatsDay(day));
+  const window = series.reduce((sum, d) => ({
+    days,
+    visits: sum.visits + d.visits,
+    newVisitors: sum.newVisitors + d.newVisitors,
+    returningVisitors: sum.returningVisitors + d.returningVisitors,
+    sessions: sum.sessions + d.sessions,
+    laps: sum.laps + d.laps,
+    flightS: sum.flightS + d.flightS,
+    crashes: sum.crashes + d.crashes,
+    countries: 0,
+  }), {
+    days,
+    visits: 0,
+    newVisitors: 0,
+    returningVisitors: 0,
+    sessions: 0,
+    laps: 0,
+    flightS: 0,
+    crashes: 0,
+    countries: 0,
+  });
+  const of = (dim) => dimRows.filter((r) => r.dim === dim).sort(byDimRow);
+  const countries = of('country');
+  window.countries = countries.filter((r) => r.key !== STATS_COUNTRY_UNKNOWN).length;
+  return {
+    generatedUtc: new Date(now).toISOString(),
+    firstDay: firstDay || null,
+    today: series[series.length - 1],
+    days: series,
+    window,
+    allTime: { ...allTime, countries: countriesAllTime },
+    countries,
+    sources: of('source'),
+    craft: of('craft'),
+    maps: of('map'),
+    inputs: of('input'),
+    surfaces: of('surface'),
   };
 }
 
@@ -279,6 +394,19 @@ class FileStore {
        * board on the next start. Same rule bugs got. */
       if (!Array.isArray(this.data.runs)) {
         this.data.runs = [];
+      }
+      /* Same rule again, for the statistics counters. A board.json written
+       * before this page existed is old, not corrupt. */
+      const stats = this.data.stats;
+      if (!stats || typeof stats !== 'object' || Array.isArray(stats)) {
+        this.data.stats = { days: {}, dims: {} };
+      } else {
+        if (!stats.days || typeof stats.days !== 'object' || Array.isArray(stats.days)) {
+          stats.days = {};
+        }
+        if (!stats.dims || typeof stats.dims !== 'object' || Array.isArray(stats.dims)) {
+          stats.dims = {};
+        }
       }
     } catch (e) {
       if (e.code === 'ENOENT') {
@@ -623,6 +751,155 @@ class FileStore {
     row.updatedUtc = nowIso();
     await this.flush();
     return fullBug(row);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Site statistics                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * Add one event to the day it landed on. The store never learns anything
+   * else about it: `event` has already been through inspectStatsEvent, and
+   * the tab handle a flush carries is read by the server's live count and
+   * deliberately not passed here.
+   */
+  async recordStats(event, { day, country }) {
+    return this.lock(() => this.recordStatsUnlocked(event, { day, country }));
+  }
+
+  async recordStatsUnlocked(event, { day, country }) {
+    if (!this.data.stats) {
+      this.data.stats = { days: {}, dims: {} };
+    }
+    const { days, dims } = this.data.stats;
+    if (!days[day]) {
+      days[day] = emptyStatsDay(day);
+    }
+    const row = days[day];
+    const bump = (dim, key, field, n) => {
+      const at = `${day}|${dim}|${key}`;
+      if (!dims[at]) {
+        dims[at] = {
+          day, dim, key, visits: 0, sessions: 0, laps: 0,
+        };
+      }
+      dims[at][field] += n;
+    };
+
+    if (event.kind === 'visit') {
+      row.visits += 1;
+      if (event.returning) {
+        row.returningVisitors += 1;
+      } else {
+        row.newVisitors += 1;
+      }
+      bump('surface', event.surface, 'visits', 1);
+      bump('country', country, 'visits', 1);
+      bump('source', event.source, 'visits', 1);
+    } else if (event.kind === 'session') {
+      row.sessions += 1;
+      bump('craft', event.craft, 'sessions', 1);
+      bump('map', event.map, 'sessions', 1);
+      bump('input', event.input, 'sessions', 1);
+      bump('country', country, 'sessions', 1);
+      bump('source', event.source, 'sessions', 1);
+    } else {
+      row.laps += event.laps;
+      row.flightS += event.flightS;
+      row.crashes += event.crashes;
+      /* A flush with no laps in it is the heartbeat that answers "flying
+       * now". It moves the day's flight seconds and touches no dimension,
+       * which is what keeps the dims table proportional to the flying
+       * rather than to the number of minutes somebody sat on the line. */
+      if (event.laps > 0) {
+        bump('craft', event.craft, 'laps', event.laps);
+        bump('map', event.map, 'laps', event.laps);
+        bump('country', country, 'laps', event.laps);
+        bump('source', event.source, 'laps', event.laps);
+      }
+    }
+    await this.flush();
+  }
+
+  async readStats({ days = 30, now = Date.now() } = {}) {
+    const stats = this.data.stats || { days: {}, dims: {} };
+    const keys = new Set(statsDayKeys(now, days));
+    const dayRows = new Map();
+    for (const [day, row] of Object.entries(stats.days)) {
+      if (keys.has(day)) {
+        dayRows.set(day, { ...row });
+      }
+    }
+    const summed = new Map();
+    for (const row of Object.values(stats.dims)) {
+      if (!keys.has(row.day)) {
+        continue;
+      }
+      const at = `${row.dim}|${row.key}`;
+      const held = summed.get(at) || {
+        dim: row.dim, key: row.key, visits: 0, sessions: 0, laps: 0,
+      };
+      held.visits += row.visits;
+      held.sessions += row.sessions;
+      held.laps += row.laps;
+      summed.set(at, held);
+    }
+    const allDays = Object.values(stats.days);
+    const allTime = allDays.reduce((sum, d) => ({
+      visits: sum.visits + d.visits,
+      sessions: sum.sessions + d.sessions,
+      laps: sum.laps + d.laps,
+      flightS: sum.flightS + d.flightS,
+      crashes: sum.crashes + d.crashes,
+    }), {
+      visits: 0, sessions: 0, laps: 0, flightS: 0, crashes: 0,
+    });
+    const named = new Set();
+    for (const row of Object.values(stats.dims)) {
+      if (row.dim === 'country' && row.key !== STATS_COUNTRY_UNKNOWN) {
+        named.add(row.key);
+      }
+    }
+    const first = Object.keys(stats.days).sort();
+    return shapeStats({
+      now,
+      days,
+      dayRows,
+      dimRows: [...summed.values()],
+      allTime,
+      firstDay: first[0] || null,
+      countriesAllTime: named.size,
+    });
+  }
+
+  /*
+   * The four numbers the statistics page takes from the BOARD's own tables
+   * rather than from the counters: they are not events and never were, so
+   * counting them from tracks and times is both cheaper and truer than
+   * having the simulator report them.
+   */
+  async boardFacts() {
+    const tracks = Object.keys(this.data.tracks).length;
+    const byPilot = new Map();
+    let times = 0;
+    for (const list of Object.values(this.data.times)) {
+      for (const row of list) {
+        times += 1;
+        const who = String(row.name || '').toLowerCase();
+        const held = byPilot.get(who) || new Set();
+        held.add(String(row.postedUtc || '').slice(0, 10));
+        byPilot.set(who, held);
+      }
+    }
+    let onMoreThanOneDay = 0;
+    for (const days of byPilot.values()) {
+      if (days.size > 1) {
+        onMoreThanOneDay += 1;
+      }
+    }
+    return {
+      tracks, times, pilots: byPilot.size, pilotsOnMoreThanOneDay: onMoreThanOneDay,
+    };
   }
 }
 
@@ -1106,6 +1383,187 @@ class PgStore {
     } finally {
       client.release();
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Site statistics                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * The same counters as FileStore.recordStatsUnlocked, written in SQL.
+   *
+   * One transaction, so a day row and its dimension rows either all move or
+   * none do. Every write is an upsert that ADDS: two instances of this
+   * service, or two requests in the same millisecond, cannot lose a count
+   * between a read and a write, because there is no read.
+   */
+  async recordStats(event, { day, country }) {
+    const dims = [];
+    const bump = (dim, key, visits, sessions, laps) => dims.push([dim, key, visits, sessions, laps]);
+    let visits = 0;
+    let newVisitors = 0;
+    let returningVisitors = 0;
+    let sessions = 0;
+    let laps = 0;
+    let flightS = 0;
+    let crashes = 0;
+
+    if (event.kind === 'visit') {
+      visits = 1;
+      newVisitors = event.returning ? 0 : 1;
+      returningVisitors = event.returning ? 1 : 0;
+      bump('surface', event.surface, 1, 0, 0);
+      bump('country', country, 1, 0, 0);
+      bump('source', event.source, 1, 0, 0);
+    } else if (event.kind === 'session') {
+      sessions = 1;
+      bump('craft', event.craft, 0, 1, 0);
+      bump('map', event.map, 0, 1, 0);
+      bump('input', event.input, 0, 1, 0);
+      bump('country', country, 0, 1, 0);
+      bump('source', event.source, 0, 1, 0);
+    } else {
+      laps = event.laps;
+      flightS = event.flightS;
+      crashes = event.crashes;
+      /* See the file store: a heartbeat touches no dimension. */
+      if (event.laps > 0) {
+        bump('craft', event.craft, 0, 0, event.laps);
+        bump('map', event.map, 0, 0, event.laps);
+        bump('country', country, 0, 0, event.laps);
+        bump('source', event.source, 0, 0, event.laps);
+      }
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO stats_days (
+           day, visits, new_visitors, returning_visitors, sessions, laps, flight_s, crashes
+         ) VALUES ($1::date,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (day) DO UPDATE SET
+           visits = stats_days.visits + EXCLUDED.visits,
+           new_visitors = stats_days.new_visitors + EXCLUDED.new_visitors,
+           returning_visitors = stats_days.returning_visitors + EXCLUDED.returning_visitors,
+           sessions = stats_days.sessions + EXCLUDED.sessions,
+           laps = stats_days.laps + EXCLUDED.laps,
+           flight_s = stats_days.flight_s + EXCLUDED.flight_s,
+           crashes = stats_days.crashes + EXCLUDED.crashes`,
+        [day, visits, newVisitors, returningVisitors, sessions, laps, flightS, crashes],
+      );
+      for (const [dim, key, v, s, l] of dims) {
+        await client.query(
+          `INSERT INTO stats_dims (day, dim, key, visits, sessions, laps)
+           VALUES ($1::date,$2,$3,$4,$5,$6)
+           ON CONFLICT (day, dim, key) DO UPDATE SET
+             visits = stats_dims.visits + EXCLUDED.visits,
+             sessions = stats_dims.sessions + EXCLUDED.sessions,
+             laps = stats_dims.laps + EXCLUDED.laps`,
+          [day, dim, key, v, s, l],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (ignored) {
+        /* Connection may already be dead. */
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /*
+   * `to_char` rather than the DATE itself, in every one of these. node-pg
+   * parses a `date` column into a JS Date at the process's LOCAL midnight,
+   * so a host running behind UTC hands back the day before and every bar on
+   * the chart shifts by one. The column is a day, the page wants a day, and
+   * the text is the day.
+   */
+  async readStats({ days = 30, now = Date.now() } = {}) {
+    const keys = statsDayKeys(now, days);
+    const from = keys[0];
+    const [series, dims, all, named] = await Promise.all([
+      this.pool.query(
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, visits,
+                new_visitors AS "newVisitors", returning_visitors AS "returningVisitors",
+                sessions, laps, flight_s AS "flightS", crashes
+         FROM stats_days WHERE day >= $1::date ORDER BY day`,
+        [from],
+      ),
+      this.pool.query(
+        `SELECT dim, key,
+                SUM(visits)::int AS visits,
+                SUM(sessions)::int AS sessions,
+                SUM(laps)::int AS laps
+         FROM stats_dims WHERE day >= $1::date GROUP BY dim, key`,
+        [from],
+      ),
+      this.pool.query(
+        `SELECT COALESCE(SUM(visits), 0)::int AS visits,
+                COALESCE(SUM(sessions), 0)::int AS sessions,
+                COALESCE(SUM(laps), 0)::int AS laps,
+                COALESCE(SUM(flight_s), 0)::bigint AS "flightS",
+                COALESCE(SUM(crashes), 0)::int AS crashes,
+                to_char(MIN(day), 'YYYY-MM-DD') AS "firstDay"
+         FROM stats_days`,
+      ),
+      this.pool.query(
+        `SELECT COUNT(DISTINCT key)::int AS n
+         FROM stats_dims WHERE dim = 'country' AND key <> $1`,
+        [STATS_COUNTRY_UNKNOWN],
+      ),
+    ]);
+    const dayRows = new Map();
+    for (const row of series.rows) {
+      dayRows.set(row.day, {
+        day: row.day,
+        visits: row.visits,
+        newVisitors: row.newVisitors,
+        returningVisitors: row.returningVisitors,
+        sessions: row.sessions,
+        laps: row.laps,
+        /* BIGINT comes back as a string, because it can be larger than a
+         * JavaScript number can hold exactly. Flight seconds cannot, and a
+         * string here would concatenate rather than add. */
+        flightS: Number(row.flightS),
+        crashes: row.crashes,
+      });
+    }
+    const row = all.rows[0];
+    return shapeStats({
+      now,
+      days,
+      dayRows,
+      dimRows: dims.rows,
+      allTime: {
+        visits: row.visits,
+        sessions: row.sessions,
+        laps: row.laps,
+        flightS: Number(row.flightS),
+        crashes: row.crashes,
+      },
+      firstDay: row.firstDay,
+      countriesAllTime: named.rows[0].n,
+    });
+  }
+
+  async boardFacts() {
+    const found = await this.pool.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM tracks) AS tracks,
+         (SELECT COUNT(*)::int FROM times) AS times,
+         (SELECT COUNT(DISTINCT lower(name))::int FROM times) AS pilots,
+         (SELECT COUNT(*)::int FROM (
+            SELECT lower(name) FROM times
+            GROUP BY lower(name)
+            HAVING COUNT(DISTINCT (posted_utc AT TIME ZONE 'UTC')::date) > 1
+          ) q) AS "pilotsOnMoreThanOneDay"`,
+    );
+    return found.rows[0];
   }
 }
 

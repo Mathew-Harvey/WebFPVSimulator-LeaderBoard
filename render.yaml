@@ -99,6 +99,14 @@ services:
       - key: BOARD_SESSION_SECRET
         sync: false
 
+      # Optional. Who gets a sponsor link, slug:Display Name, one per line
+      # or comma separated. Unset means no sponsors and every arrival on the
+      # statistics tab is Direct or Other. A source this list does not name
+      # is folded into Other, so the table cannot be grown by inventing one.
+      # Sync it from the dashboard.
+      - key: BOARD_SPONSORS
+        sync: false
+
 databases:
   - name: webfpvleaderboard-db
     plan: free

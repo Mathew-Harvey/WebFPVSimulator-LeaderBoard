@@ -19,7 +19,9 @@ import { dirname } from 'node:path';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
   creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
+  inspectStatsEvent, normaliseCountry, statsDay,
 } from './validate.js';
+import { sourceKey } from './sponsors.js';
 import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
 } from './admin.js';
@@ -687,6 +689,11 @@ async function testHttp() {
       SIM_ORIGIN: 'http://127.0.0.1:8000',
       BOARD_ADMIN_TOKEN: ADMIN_TOKEN,
       BOARD_ADMINS: `${ADMIN_EMAIL}:plain:${ADMIN_PASSWORD}`,
+      /* One sponsor, so the fold has a real slug to keep as well as an
+       * invented one to refuse, and BOARD_TRUST_PROXY so the country header
+       * is believed the way it is behind the edge. */
+      BOARD_SPONSORS: 'rotorriot:Rotor Riot',
+      BOARD_TRUST_PROXY: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -766,7 +773,16 @@ async function testHttp() {
     });
     check('a ghost for a different lap is refused', wrongLap.status === 400);
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
-    check('the page is served', html.includes('Tracks and Times') && html.includes('app.js'));
+    check('the page is served', html.includes('Tracks and Statistics') && html.includes('app.js'));
+    /* The two tabs are in the MARKUP rather than built by the script, so a
+     * pasted #stats link works on a board whose track list failed to load
+     * and a reader with no JavaScript still sees what this page holds. */
+    check('the page carries both tabs', html.includes('id="tab-tracks"') && html.includes('id="tab-stats"'));
+    check('the statistics section is in the markup', html.includes('id="view-stats"'));
+    /* The promise, in the one place a visitor reads it. If this sentence
+     * ever stops being true the check below is the thing that has to be
+     * argued with rather than quietly deleted. */
+    check('the page says what it counts', html.includes('No cookie is set'));
     /* Relative, not root absolute. The board is served at its own root here
      * and under /board/ on webfpv.org, and a leading slash on either of these
      * asks the landing page for the board's script. The old assertion above
@@ -1392,6 +1408,123 @@ async function testHttp() {
       headers: { authorization: `Bearer ${session.token}` },
     });
     check('and reads the bugs inbox with the same token', inboxByAdmin.status === 200);
+
+    /* ---------------------------------------------------------------- */
+    /* Site statistics, over the wire                                     */
+    /* ---------------------------------------------------------------- */
+
+    console.log('\nsite statistics, over the wire');
+    const B = 'http://127.0.0.1:3199';
+    const post = (body, headers = {}) => fetch(`${B}/api/stats/events`, {
+      method: 'POST',
+      /* text/plain, because that is what a beacon sends and a beacon is
+       * what the pages use: it cannot set a header, and a simple request
+       * needs no preflight. If this route ever starts insisting on
+       * application/json, every event from every page stops arriving and
+       * nothing else would say so. */
+      headers: { 'content-type': 'text/plain', ...headers },
+      body: JSON.stringify(body),
+    });
+
+    const visit = await post({
+      v: 1, kind: 'visit', surface: 'sim', returning: false, source: 'rotorriot',
+    }, { 'x-webfpv-country': 'AU' });
+    check('a visit is taken', visit.status === 204);
+    check('and it answers with no body at all', (await visit.text()) === '');
+    check('a text/plain body is read', true);
+
+    await post({ v: 1, kind: 'visit', surface: 'board', returning: true, source: 'not-a-sponsor' },
+      { 'x-webfpv-country': 'nonsense' });
+    await post({ v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad' },
+      { 'x-webfpv-country': 'NZ' });
+    await post({
+      v: 1, kind: 'flush', tab: 'tab-11112222', craft: '5inch', map: 'custom', laps: 4, flightS: 61, crashes: 1,
+    }, { 'x-webfpv-country': 'AU' });
+
+    /* Global Privacy Control. The same 204 an accepted event gets, on
+     * purpose, and nothing counted. A different status would tell a script
+     * whether the signal was seen. */
+    const gpc = await post({ v: 1, kind: 'visit', surface: 'sim', returning: false }, { 'sec-gpc': '1' });
+    check('a browser that asked not to be counted gets the same answer', gpc.status === 204);
+
+    const badKind = await post({ v: 1, kind: 'pageview' });
+    check('an event this board does not count is refused', badKind.status === 400);
+    const badDelta = await post({ v: 1, kind: 'flush', tab: 'tab-11112222', craft: '5inch', laps: 900 });
+    check('and so is a claim bigger than a minute', badDelta.status === 400);
+    const notJson = await fetch(`${B}/api/stats/events`, { method: 'POST', body: 'not json at all' });
+    check('and so is something that is not JSON', notJson.status === 400);
+
+    const statsRes = await fetch(`${B}/api/stats`);
+    const stats = await statsRes.json();
+    check('the statistics read answers', statsRes.status === 200);
+    /* The one response besides a card animation that is not no-store. A
+     * hundred readers polling this should cost the database what one does. */
+    check('and is cacheable for a short while',
+      /max-age=\d+/.test(statsRes.headers.get('cache-control') || ''));
+    check('the visit is on the board', stats.today.visits === 2);
+    check('and the GPC one is not', stats.today.newVisitors === 1);
+    check('the returning one moved its own column', stats.today.returningVisitors === 1);
+    check('the session and its laps are counted',
+      stats.today.sessions === 1 && stats.today.laps === 4 && stats.today.flightS === 61);
+    check('the flying tab is counted as flying now', stats.live.flying === 1);
+    check('the window is thirty days', stats.days.length === 30);
+
+    const sourceRow = (key) => stats.sources.find((r) => r.key === key) || {};
+    check("a real sponsor keeps its own row", sourceRow('rotorriot').visits === 1);
+    check('and travels with the name the board prints', sourceRow('rotorriot').name === 'Rotor Riot');
+    check('a source this board never heard of folds into other', sourceRow('not-a-sponsor').visits === undefined
+      && sourceRow('other').visits === 1);
+    const countryRow = (key) => stats.countries.find((r) => r.key === key) || {};
+    check('the country from the edge is counted', countryRow('AU').visits === 1);
+    check('and a header that is not a country is unknown', countryRow('ZZ').visits === 1);
+
+    /* The four numbers off the board's own tables. Two tracks were
+     * published above and one was removed, so one is left. */
+    /* Checked against the live list rather than against a number written
+     * here: the count is whatever this suite has published and removed by
+     * now, and a hardcoded one would have to be edited every time a check
+     * above it published another track. What matters is that the two
+     * agree. Nothing mutates tracks between the read above and this one. */
+    const live = await fetch(`${B}/api/tracks`).then((r) => r.json());
+    const namedPilots = new Set(
+      live.tracks.flatMap((t) => (t.best ? [String(t.best.name).toLowerCase()] : [])),
+    );
+    check('the board facts count the tracks that are actually on the board',
+      stats.board.tracks === live.tracks.length);
+    check('and the times posted on them',
+      stats.board.times === live.tracks.reduce((sum, t) => sum + (t.times || 0), 0));
+    check('and at least the pilots holding a record', stats.board.pilots >= namedPilots.size);
+    check('and nobody has been back another day inside one test run',
+      stats.board.pilotsOnMoreThanOneDay === 0);
+
+    /* The flood gate. Its allowance is 200 in ten minutes, which is far
+     * above a flying tab's one a minute, and this spends the rest of it. */
+    let flooded = 0;
+    for (let i = 0; i < 260; i += 1) {
+      /* eslint-disable-next-line no-await-in-loop */
+      const r = await post({ v: 1, kind: 'flush', tab: `tab-flood-${i}`, craft: '5inch', flightS: 1 });
+      if (r.status === 429) {
+        flooded += 1;
+      }
+    }
+    check('an address that posts hundreds of events is shut off', flooded > 0);
+
+    /* And a refused event never spent the allowance in the first place,
+     * which is why the gate above took as long as it did to close. */
+    check('the gate closed after the allowance rather than before it', flooded < 200);
+
+    /* The one thing an admin gets that the public page does not: the list
+     * of sponsors, with the link each one is given. */
+    const panel = await fetch(`${B}/api/admin/session`, {
+      headers: { authorization: `Bearer ${session.token}` },
+    }).then((r) => r.json());
+    check('a signed in admin is handed the sponsor links',
+      Array.isArray(panel.sponsors) && panel.sponsors.length === 1);
+    check('and the link points at the simulator with the slug on it',
+      panel.sponsors[0].link === 'http://127.0.0.1:8000/?utm_source=rotorriot&utm_medium=sponsor');
+    const anon = await fetch(`${B}/api/stats`).then((r) => r.json());
+    check('the public read does not carry the list of sponsors',
+      anon.sponsors === undefined);
   } finally {
     child.kill('SIGTERM');
     await rm(dir, { recursive: true, force: true });
@@ -1530,10 +1663,195 @@ function testAdmin() {
       && readSession(null) === null && readSession('v2.a.b') === null);
 }
 
+/*
+ * The statistics wire format, the sponsor fold and the counters.
+ *
+ * What this suite is really checking is a PROMISE rather than a feature:
+ * the page says nothing identifying is accepted or stored, and these are
+ * the checks that would fail if that stopped being true. The ones about
+ * closed vocabularies matter for the same reason from the other side: they
+ * are what stops a stranger with curl growing a table on a public page.
+ */
+async function testStats() {
+  console.log('\nsite statistics');
+
+  const ok = (body) => inspectStatsEvent(body, sourceKey);
+
+  check('a visit is accepted', !ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false,
+  }).error);
+  check('a session is accepted', !ok({
+    v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad',
+  }).error);
+  check('a flush is accepted', !ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44,
+  }).error);
+
+  check('a version this board does not read is refused', Boolean(ok({ v: 2, kind: 'visit' }).error));
+  check('an unknown kind is refused', Boolean(ok({ v: 1, kind: 'pageview' }).error));
+  check('a visit from an unknown page is refused', Boolean(ok({
+    v: 1, kind: 'visit', surface: 'somewhere', returning: false,
+  }).error));
+  check('a visit with no new-or-returning answer is refused', Boolean(ok({
+    v: 1, kind: 'visit', surface: 'sim',
+  }).error));
+  check('an aircraft this board does not count is refused', Boolean(ok({
+    v: 1, kind: 'session', craft: 'tinywhoop', map: 'custom', input: 'gamepad',
+  }).error));
+  check('a long tab handle is refused', Boolean(ok({
+    v: 1, kind: 'flush', tab: 'x'.repeat(200), craft: '5inch',
+  }).error));
+  check('a tab handle with punctuation in it is refused', Boolean(ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111;DROP', craft: '5inch',
+  }).error));
+  check('more laps than a minute can hold is refused', Boolean(ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 31,
+  }).error));
+  check('more flight seconds than a minute can hold is refused', Boolean(ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', flightS: 91,
+  }).error));
+  check('a negative delta is refused', Boolean(ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: -3,
+  }).error));
+
+  /* A map or an input from a NEWER simulator folds rather than being
+   * refused, and that is the difference between the two kinds of
+   * vocabulary here: refusing a new map would mean an older board silently
+   * dropping every session once the simulator gained one. */
+  const newMap = ok({
+    v: 1, kind: 'session', craft: '5inch', map: 'bando', input: 'gamepad',
+  });
+  check('a map this board has not heard of folds to other', newMap.event.map === 'other');
+  const newInput = ok({
+    v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'eye-tracker',
+  });
+  check('an input this board has not heard of folds to other', newInput.event.input === 'other');
+
+  /* Nothing identifying survives the gate, because there is nowhere for it
+   * to go: the event that comes out has exactly the fields the store reads. */
+  const smuggled = ok({
+    v: 1,
+    kind: 'visit',
+    surface: 'sim',
+    returning: true,
+    ip: '203.0.113.7',
+    ua: 'Mozilla/5.0',
+    pilot: 'Ada Rook',
+    referrer: 'https://example.com/',
+  }).event;
+  check('nothing but the counted fields comes out of a visit',
+    Object.keys(smuggled).sort().join(',') === 'kind,returning,source,surface');
+  const flushed = ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 1, name: 'Ada Rook',
+  }).event;
+  check('nothing but the counted fields comes out of a flush',
+    Object.keys(flushed).sort().join(',') === 'craft,crashes,flightS,kind,laps,map,source,tab');
+
+  /* The sponsor fold. This process has no BOARD_SPONSORS set, so every
+   * named source is unknown to it, which is the case that matters: the
+   * table cannot be grown by inventing one. */
+  check('no source at all is direct', sourceKey(undefined) === 'direct');
+  check('an empty source is direct', sourceKey('') === 'direct');
+  check('a source this board never heard of is other', sourceKey('rotorriot') === 'other');
+  check('and so is a hundred of them', new Set(
+    Array.from({ length: 100 }, (_, i) => sourceKey(`sponsor-${i}`)),
+  ).size === 1);
+  check('a source is folded before it is stored',
+    ok({ v: 1, kind: 'visit', surface: 'sim', returning: false, source: 'made-up' }).event.source === 'other');
+
+  /* The country, which is two letters from the edge or nothing at all. */
+  check('a country code is taken as it comes', normaliseCountry('AU') === 'AU');
+  check('and lower case is the same country', normaliseCountry('au') === 'AU');
+  check('rubbish is unknown', normaliseCountry('not-a-country') === 'ZZ');
+  check('an absent header is unknown', normaliseCountry(undefined) === 'ZZ');
+  check("the edge's own 'no country' is unknown", normaliseCountry('XX') === 'ZZ');
+  check('a Tor exit is unknown', normaliseCountry('T1') === 'ZZ');
+  check('an address is never a country', normaliseCountry('203.0.113.7') === 'ZZ');
+
+  /* The day is the SERVER's UTC day. A browser cannot name it, and a host
+   * that moves region must not move the boundary. */
+  check('the day is the UTC day', statsDay(new Date('2026-09-21T23:59:59Z')) === '2026-09-21');
+  check('and one second later is the next one', statsDay(new Date('2026-09-22T00:00:01Z')) === '2026-09-22');
+
+  /* The counters themselves, against the file store. */
+  const dir = await mkdtemp(join(tmpdir(), 'webfpv-stats-'));
+  try {
+    process.env.BOARD_FILE = join(dir, 'board.json');
+    const store = await openStore();
+    const now = Date.parse('2026-09-21T12:00:00Z');
+    const day = '2026-09-21';
+    const before = '2026-09-20';
+    const put = (body, at = day, country = 'AU') => store.recordStats(ok(body).event, { day: at, country });
+
+    await put({ v: 1, kind: 'visit', surface: 'sim', returning: false });
+    await put({ v: 1, kind: 'visit', surface: 'board', returning: true });
+    await put({ v: 1, kind: 'visit', surface: 'sim', returning: true }, day, 'NZ');
+    await put({ v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad' });
+    await put({ v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 3, flightS: 58, crashes: 1 });
+    await put({ v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 2, flightS: 41, crashes: 2 });
+    await put({ v: 1, kind: 'flush', tab: 'bbbb2222', craft: 'whoop65', laps: 4, flightS: 60 }, before, 'ZZ');
+
+    const read = await store.readStats({ days: 7, now });
+    check('a new browser moves the new column only',
+      read.today.newVisitors === 1 && read.today.returningVisitors === 2);
+    check('and both are counted as pilots', read.today.visits === 3);
+    check('two flushes add up rather than replacing',
+      read.today.laps === 5 && read.today.flightS === 99 && read.today.crashes === 3);
+    check('a session is counted once', read.today.sessions === 1);
+    check('yesterday stays on yesterday', read.days[read.days.length - 2].laps === 4);
+    check('the window is as many days as it was asked for', read.days.length === 7);
+    check('and the days are consecutive and end today',
+      read.days[0].day === '2026-09-15' && read.days[6].day === day);
+    check('a day nobody visited is a nought rather than a gap',
+      read.days[0].visits === 0 && read.days[0].laps === 0);
+    check('the window sums both days', read.window.laps === 9 && read.window.visits === 3);
+
+    const country = (key) => read.countries.find((r) => r.key === key) || {};
+    check('the country a visit came from is counted', country('AU').visits === 2);
+    check('and a second country is its own row', country('NZ').visits === 1);
+    check('laps are counted against the country that flew them', country('AU').laps === 5);
+    check('two named countries are two countries', read.window.countries === 2);
+    check('unknown is not one of them',
+      read.countries[read.countries.length - 1].key === 'ZZ');
+
+    check('the aircraft is counted from the session', (read.craft.find((r) => r.key === '5inch') || {}).sessions === 1);
+    check('and its laps from the flushes', (read.craft.find((r) => r.key === '5inch') || {}).laps === 5);
+    check('the input is counted', (read.inputs.find((r) => r.key === 'gamepad') || {}).sessions === 1);
+    check('the page a visit came from is counted',
+      (read.surfaces.find((r) => r.key === 'sim') || {}).visits === 2);
+
+    /* A heartbeat with nothing in it moves the day's flight seconds and
+     * touches no dimension at all. That is what keeps the dims table
+     * proportional to the flying rather than to the sitting. */
+    const dimsBefore = JSON.stringify(read.craft);
+    await put({ v: 1, kind: 'flush', tab: 'cccc3333', craft: '5inch', laps: 0, flightS: 30 });
+    const after = await store.readStats({ days: 7, now });
+    check('a heartbeat with no laps counts its seconds', after.today.flightS === 129);
+    check('and adds no dimension row', JSON.stringify(after.craft) === dimsBefore);
+
+    check('all time is every day there has ever been', after.allTime.laps === 9);
+    check('and it knows when counting started', after.firstDay === before);
+
+    /* The board's own tables, which are not counters and never were. */
+    await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });
+    await store.addTime({ trackId: 'trk-1a2b3c4d', name: 'Ada Rook', lapMs: 29110 });
+    await store.addTime({ trackId: 'trk-1a2b3c4d', name: 'ada rook', lapMs: 28110 });
+    await store.addTime({ trackId: 'trk-1a2b3c4d', name: 'Bo', lapMs: 31000 });
+    const facts = await store.boardFacts();
+    check('the board counts its own tracks and times', facts.tracks === 1 && facts.times === 3);
+    check('a pilot who capitalises differently is one pilot', facts.pilots === 2);
+    check('and nobody has been back another day yet', facts.pilotsOnMoreThanOneDay === 0);
+  } finally {
+    delete process.env.BOARD_FILE;
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 testOrigins();
 testAdmin();
 await testValidate();
 await testStore();
+await testStats();
 await testHttp();
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

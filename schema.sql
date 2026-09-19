@@ -167,3 +167,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS runs_pilot_map
 -- means no animation, which is every row until one is uploaded.
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gif BYTEA;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS gif_utc TIMESTAMPTZ;
+
+-- ------------------------------------------------------------------
+-- Site statistics. COUNTERS, NEVER EVENTS.
+-- ------------------------------------------------------------------
+--
+-- There is no row here that describes one person, one visit or one lap.
+-- Every write adds to a total that already existed, so the finest grain
+-- this database holds is "on this UTC day, this many". That is not a
+-- privacy policy written next to a table that could answer a different
+-- question; it is the table being unable to answer it.
+--
+-- No address, no identifier, no user agent, no session row, no timestamp
+-- finer than a day. The country is two letters handed over by the edge in
+-- front of the site and nothing here ever looks one up. The browser that
+-- sends an event decides whether it is new or returning, from a date it
+-- keeps for itself, and sends the ANSWER rather than the date.
+--
+-- Additive: an existing database gains these the next time the process
+-- starts, and nothing in tracks, times, runs or bugs is rewritten.
+
+CREATE TABLE IF NOT EXISTS stats_days (
+  day DATE PRIMARY KEY,
+  visits INTEGER NOT NULL DEFAULT 0,
+  new_visitors INTEGER NOT NULL DEFAULT 0,
+  returning_visitors INTEGER NOT NULL DEFAULT 0,
+  sessions INTEGER NOT NULL DEFAULT 0,
+  laps INTEGER NOT NULL DEFAULT 0,
+  flight_s BIGINT NOT NULL DEFAULT 0,
+  crashes INTEGER NOT NULL DEFAULT 0
+);
+
+-- One row per day per dimension value: (day, 'country', 'AU'), (day,
+-- 'craft', '5inch'), and so on. A wide table with a column per country was
+-- the alternative and it is a migration every time the world changes.
+--
+-- Every `key` comes from a CLOSED vocabulary in src/validate.js or from the
+-- sponsor list in src/sponsors.js, so this table cannot be grown by a
+-- stranger inventing values: an unknown source folds into 'other' and an
+-- unknown country into 'ZZ' before anything is written.
+CREATE TABLE IF NOT EXISTS stats_dims (
+  day DATE NOT NULL,
+  dim TEXT NOT NULL,
+  key TEXT NOT NULL,
+  visits INTEGER NOT NULL DEFAULT 0,
+  sessions INTEGER NOT NULL DEFAULT 0,
+  laps INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, dim, key)
+);
+
+-- The thirty day window is the page's default read, and it is a range scan
+-- over a table whose row count grows with the days rather than the traffic.
+CREATE INDEX IF NOT EXISTS stats_dims_day ON stats_dims (day);

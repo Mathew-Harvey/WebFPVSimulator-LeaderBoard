@@ -39,10 +39,12 @@ import {
 } from './admin.js';
 import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectRun,
-  inspectTags, normaliseLapMs, normaliseName, normaliseThreeMs,
+  inspectStatsEvent, inspectTags, normaliseCountry, normaliseLapMs, normaliseName,
+  normaliseThreeMs, statsDay,
   BUG_ID_RE, BUG_KINDS, BUG_STATUSES, MAX_GIF_BASE64_CHARS, RUN_MAPS, TAGS,
   TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
+import { sourceKey, sponsorLink, sponsorList, sponsorName } from './sponsors.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const publicDir = join(root, 'public');
@@ -85,6 +87,113 @@ const bugsToken = String(process.env.BUGS_TOKEN || '');
  * simulator's repository holds this and nothing else.
  */
 const adminToken = String(process.env.BOARD_ADMIN_TOKEN || '');
+
+/* ------------------------------------------------------------------ */
+/* Site statistics                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * HOW MANY ARE FLYING RIGHT NOW, and it is the one number on the statistics
+ * page that is not a stored counter.
+ *
+ * A flying tab sends a heartbeat once a minute carrying a random handle it
+ * made at page load. This map holds those handles for three minutes and
+ * counts them. It is IN MEMORY AND NOWHERE ELSE: no table, no file, no
+ * column, nothing that survives a restart, which is the point. A number
+ * called "now" does not need a history and a history of who was flying when
+ * is exactly the thing this page promises not to keep.
+ *
+ * It is process local, so on a host running two instances each would count
+ * its own half, and on Render's free tier it starts empty after a sleep.
+ * Both are undercounts of a number that is decoration on a page of counters,
+ * and both are better than a shared table keyed by a per browser handle.
+ */
+const FLYING_WINDOW_MS = 3 * 60 * 1000;
+const FLYING_MAX_TABS = 4096;
+const flyingTabs = new Map();
+
+function sweepFlying(now) {
+  for (const [tab, at] of flyingTabs) {
+    if (now - at >= FLYING_WINDOW_MS) {
+      flyingTabs.delete(tab);
+    }
+  }
+}
+
+function markFlying(tab) {
+  const now = Date.now();
+  /* A cap as well as a sweep, because the sweep only runs on a read and a
+   * board nobody is looking at still takes heartbeats. Dropping the oldest
+   * is right: it is the one closest to expiring anyway. */
+  if (flyingTabs.size >= FLYING_MAX_TABS) {
+    sweepFlying(now);
+    if (flyingTabs.size >= FLYING_MAX_TABS) {
+      flyingTabs.delete(flyingTabs.keys().next().value);
+    }
+  }
+  flyingTabs.delete(tab);
+  flyingTabs.set(tab, now);
+}
+
+function flyingNow() {
+  const now = Date.now();
+  sweepFlying(now);
+  return flyingTabs.size;
+}
+
+/*
+ * The read is cached for twenty seconds, and it is the second response on
+ * this board that is not no-store.
+ *
+ * Every visitor on the statistics tab polls this every thirty seconds while
+ * they are looking at it, and the answer is four aggregate queries over
+ * tables that only change by counting. Twenty seconds is under the poll
+ * interval, so a reader still sees their own effect on the numbers within
+ * one tick, and it is enough that a hundred readers cost the database what
+ * one does.
+ *
+ * COUNT_WINDOW_DAYS is the chart's width and the only window this route
+ * offers. A `?days=` would be a second thing to validate and a second cache
+ * key for a page that asks for one number.
+ */
+const STATS_CACHE_MS = 20_000;
+const STATS_WINDOW_DAYS = 30;
+let statsCache = { at: 0, body: '' };
+
+/* How many events one address may post in ten minutes. A flying tab spends
+ * one a minute, a pilot with the simulator and the board open spends a few
+ * more, and 200 is far above either and far below anything that could move
+ * a public number. */
+const STATS_FLOOD_LIMIT = 200;
+
+/*
+ * GLOBAL PRIVACY CONTROL, and it is honoured on the server as well as in
+ * the page.
+ *
+ * The client checks navigator.globalPrivacyControl and sends nothing, so
+ * this is the belt to that braces: a browser that sets the header without
+ * exposing the property, an extension that adds it, or a page of this
+ * product that has not learned to check yet. The answer is the same 204 an
+ * accepted event gets, deliberately, because a different status would tell
+ * a script whether the signal was seen and there is nothing here to tell.
+ */
+/*
+ * The sponsors, with the link each one is given, for the Admin panel.
+ *
+ * Admin only, and the reason is not that a slug is secret: it is printed on
+ * a poster and it arrives in a query string. It is that the LIST is the set
+ * of sponsors including the ones with no traffic yet, which is a commercial
+ * fact rather than a public one. The per sponsor NUMBERS are public on the
+ * statistics tab, deliberately, because a sponsor should be able to check
+ * them without asking anybody.
+ */
+function adminSponsors() {
+  return sponsorList().map((s) => ({ ...s, link: sponsorLink(simOrigin, s.slug) }));
+}
+
+function privacySignalled(req) {
+  return String(req.headers['sec-gpc'] || '') === '1';
+}
 
 function bearer(req) {
   const header = String(req.headers.authorization || '');
@@ -262,7 +371,13 @@ function clientIp(req) {
  * on the freestyle board is that a pilot holds ONE row per map: see
  * addRunUnlocked in src/store.js.
  */
-function bugFlooded(ip) {
+/*
+ * `limit` is an argument because the statistics route is a different shape
+ * of caller: a tab that is flying sends one heartbeat a minute on purpose,
+ * so eight in ten minutes would silence an honest pilot after eight
+ * minutes. Its allowance is set where it is spent, at the route.
+ */
+function bugFlooded(ip, limit = 8) {
   const now = Date.now();
   const windowMs = 10 * 60 * 1000;
   /* The map used to keep every IP that ever posted, forever; a stale entry
@@ -277,7 +392,7 @@ function bugFlooded(ip) {
   }
   const hits = (bugHits.get(ip) || []).filter((t) => now - t < windowMs);
   bugHits.set(ip, hits);
-  return hits.length >= 8;
+  return hits.length >= limit;
 }
 
 function recordBugHit(ip) {
@@ -397,7 +512,12 @@ async function handleApi(req, res, url) {
     }
     const token = mintSession(who);
     const session = readSession(token);
-    send(res, 200, { token, email: who, expiresUtc: session ? session.expiresUtc : null });
+    send(res, 200, {
+      token,
+      email: who,
+      expiresUtc: session ? session.expiresUtc : null,
+      sponsors: adminSponsors(),
+    });
     return;
   }
 
@@ -421,7 +541,113 @@ async function handleApi(req, res, url) {
       email: who.email,
       kind: who.kind,
       expiresUtc: who.expiresUtc || null,
+      sponsors: adminSponsors(),
     });
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Site statistics                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * ONE EVENT, ADDED TO A DAILY TOTAL.
+   *
+   * The whole privacy argument for this page is in what this route does not
+   * do. It does not set a cookie. It does not store an address: clientIp is
+   * read for the flood gate below and goes out of scope with the request.
+   * It does not store the tab handle a flush carries, which lives in memory
+   * for three minutes and answers one number. It does not store a
+   * timestamp finer than the day, a user agent, a referrer, a screen size,
+   * a pilot name or a track id, and there is no field in the wire format
+   * for any of them.
+   *
+   * 204 for everything it accepts, and 204 for a request that asked not to
+   * be counted, because the sender has nothing to do with either answer.
+   */
+  if (req.method === 'POST' && path === '/api/stats/events') {
+    if (privacySignalled(req)) {
+      res.writeHead(204, { 'cache-control': 'no-store' });
+      res.end();
+      return;
+    }
+    const ip = clientIp(req);
+    if (bugFlooded(`stats:${ip}`, STATS_FLOOD_LIMIT)) {
+      send(res, 429, { error: 'Too many events from here.' });
+      return;
+    }
+    let body;
+    try {
+      /* Small, because the largest honest event is about two hundred
+       * characters. text/plain arrives here as readily as JSON: a beacon
+       * cannot set a content type header and this route never reads one. */
+      body = JSON.parse(await readBody(req, 2_000, 'That event is too large.'));
+    } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
+      send(res, 400, { error: 'That event was not readable.' });
+      return;
+    }
+    const inspected = inspectStatsEvent(body, sourceKey);
+    if (inspected.error) {
+      send(res, 400, { error: inspected.error });
+      return;
+    }
+    /* Spent only on an event that was actually stored, the same rule the
+     * bug form follows: eight malformed posts should not lock out a pilot
+     * who then sends a good one. */
+    recordBugHit(`stats:${ip}`);
+    if (inspected.event.kind === 'flush') {
+      markFlying(inspected.event.tab);
+    }
+    /*
+     * The country comes from the edge and only when something in front of
+     * this process is trusted to set headers, exactly like the forwarded
+     * host. A client can send this header; without BOARD_TRUST_PROXY it is
+     * ignored, so a direct instance cannot be told where its visitors are.
+     */
+    const country = normaliseCountry(
+      process.env.BOARD_TRUST_PROXY === '1' ? req.headers['x-webfpv-country'] : '',
+    );
+    await store.recordStats(inspected.event, { day: statsDay(), country });
+    res.writeHead(204, { 'cache-control': 'no-store' });
+    res.end();
+    return;
+  }
+
+  /*
+   * What the statistics page reads. Counters, and four numbers off the
+   * board's own tables, which are not events and never were.
+   *
+   * Cached for twenty seconds in process AND in the browser. This is the
+   * only response besides a card animation that is not no-store, which is
+   * why the header is written here rather than through send.
+   */
+  if (req.method === 'GET' && path === '/api/stats') {
+    const now = Date.now();
+    if (!statsCache.body || now - statsCache.at >= STATS_CACHE_MS) {
+      const [counts, board] = await Promise.all([
+        store.readStats({ days: STATS_WINDOW_DAYS, now }),
+        store.boardFacts(),
+      ]);
+      statsCache = {
+        at: now,
+        body: JSON.stringify({
+          ...counts,
+          /* The sponsor's printed name travels with its row, so the page
+           * never has to hold a second copy of the list to read one. */
+          sources: counts.sources.map((row) => ({ ...row, name: sponsorName(row.key) })),
+          live: { flying: flyingNow() },
+          board,
+        }),
+      };
+    }
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': `public, max-age=${Math.round(STATS_CACHE_MS / 1000)}`,
+    });
+    res.end(statsCache.body);
     return;
   }
 
