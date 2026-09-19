@@ -1477,6 +1477,25 @@ async function testHttp() {
     check('the country from the edge is counted', countryRow('AU').visits === 1);
     check('and a header that is not a country is unknown', countryRow('ZZ').visits === 1);
 
+    /*
+     * Cloudflare's own header is read when the Worker's is absent, which is
+     * a Worker from before it learned to set one. Posted as flushes with a
+     * lap in them, because a lap moves the country row and a visit has
+     * already been spent on this browser's day above. Read back after the
+     * cache has aged out, since the read above was built before these.
+     */
+    await post({
+      v: 1, kind: 'flush', tab: 'tab-cf-1', craft: '5inch', map: 'custom', laps: 1,
+    }, { 'cf-ipcountry': 'NZ' });
+    await post({
+      v: 1, kind: 'flush', tab: 'tab-cf-2', craft: '5inch', map: 'custom', laps: 1,
+    }, { 'cf-ipcountry': 'NZ', 'x-webfpv-country': 'FR' });
+    await new Promise((r) => setTimeout(r, 20_100));
+    const later = await fetch(`${B}/api/stats`).then((r) => r.json());
+    const laterRow = (key) => later.countries.find((r) => r.key === key) || {};
+    check("Cloudflare's own country header is read when the Worker's is absent", laterRow('NZ').laps === 1);
+    check("and the Worker's header wins when both are present", laterRow('FR').laps === 1);
+
     /* The four numbers off the board's own tables. Two tracks were
      * published above and one was removed, so one is left. */
     /* Checked against the live list rather than against a number written

@@ -614,11 +614,25 @@ async function handleApi(req, res, url) {
     /*
      * The country comes from the edge and only when something in front of
      * this process is trusted to set headers, exactly like the forwarded
-     * host. A client can send this header; without BOARD_TRUST_PROXY it is
-     * ignored, so a direct instance cannot be told where its visitors are.
+     * host. A client can send these headers; without BOARD_TRUST_PROXY they
+     * are ignored, so a direct instance cannot be told where its visitors
+     * are.
+     *
+     * TWO HEADERS, IN ORDER. x-webfpv-country is the one the Worker in
+     * edge/router.js sets on purpose. cf-ipcountry is Cloudflare's own,
+     * put on every proxied request when the zone's geolocation is on, and
+     * the Worker forwards it with the rest of the headers whether or not it
+     * has learned to set the first. That is the case this fallback exists
+     * for: the Worker is deployed by hand, a push to main does not touch
+     * it, and the first day of this page counted every visitor as Unknown
+     * because the Worker in front of it was the one from before. Both are
+     * the same two letters from the same edge, and both are believed under
+     * the same rule.
      */
     const country = normaliseCountry(
-      process.env.BOARD_TRUST_PROXY === '1' ? req.headers['x-webfpv-country'] : '',
+      process.env.BOARD_TRUST_PROXY === '1'
+        ? (req.headers['x-webfpv-country'] || req.headers['cf-ipcountry'])
+        : '',
     );
     await store.recordStats(inspected.event, { day: statsDay(), country });
     res.writeHead(204, { 'cache-control': 'no-store' });
