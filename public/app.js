@@ -41,6 +41,36 @@ import {
   fieldSize, paintPlans, planCanvas, planLabel,
 } from './plan.js';
 
+/*
+ * The public Patreon page, and the hover line. The same two strings are
+ * set in the simulator's src/share/patreon.js and the landing page's
+ * src/config.js. Not a simulator-tab link: Patreon is outside the product,
+ * so it must not take the webfpv-sim name.
+ */
+const PATREON_URL = 'https://www.patreon.com/c/webfpv';
+
+const PATREON_NOTE = 'Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.';
+
+function bindPatreonLinks() {
+  for (const a of document.querySelectorAll('[data-patreon]')) {
+    a.title = PATREON_NOTE;
+    a.setAttribute('aria-label', PATREON_NOTE);
+    if (PATREON_URL) {
+      a.href = PATREON_URL;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      delete a.dataset.patreonPending;
+      continue;
+    }
+    a.href = '#';
+    a.removeAttribute('target');
+    a.dataset.patreonPending = '1';
+    a.addEventListener('click', (event) => {
+      event.preventDefault();
+    });
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Where this page lives                                               */
 /* ------------------------------------------------------------------ */
@@ -2385,6 +2415,7 @@ async function start() {
    * can be derived from this page's own address, so bind it now and let the
    * served config correct it if and when it arrives.
    */
+  bindPatreonLinks();
   bindLinks(state.config);
   bindHome();
 

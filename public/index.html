@@ -223,6 +223,41 @@
       }
       a.text:hover, button.text:hover { color: var(--sakura); }
 
+      /*
+       * Support. Patreon's symbol in their coral, the name in this page's
+       * type. It sits with the other links, under the Tracks, Times and
+       * Pilots counts, and again in the spine and the footer so it does
+       * not scroll away. The counts stay the record. The coral is only
+       * the mark.
+       */
+      a.patreon {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 28px;
+        padding: 0 11px 0 8px;
+        border-radius: 3px;
+        background: rgba(16, 22, 17, 0.72);
+        box-shadow: inset 0 0 0 1px rgba(244, 236, 214, 0.16);
+        color: var(--cream);
+        font: 600 12px/1 var(--ui);
+        letter-spacing: 0.02em;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      a.patreon svg { width: 14px; height: 14px; display: block; flex: 0 0 auto; }
+      a.patreon:hover { color: var(--cream); box-shadow: inset 0 0 0 1px #FF424D; }
+      @media (max-width: 520px) {
+        .spine a.patreon { position: relative; }
+        .spine a.patreon span {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+        }
+      }
+
       /* Times. Mono, tabular, with the hundredths a shade quieter so the
          seconds are what the eye lands on. */
       .tm, .record-time, .rail-time { font-family: var(--mono); }
@@ -1784,6 +1819,7 @@
       footer nav { display: flex; gap: 18px; margin-left: auto; }
       footer a { color: var(--slate); text-decoration: none; }
       footer a:hover { color: var(--sakura); }
+      footer a.patreon:hover { color: var(--cream); box-shadow: inset 0 0 0 1px #FF424D; }
 
 
       /* ---------------------------------------------------------------
@@ -2257,6 +2293,10 @@
           <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
           <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
           <a class="text" id="mast-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+          <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
+            <span>Patreon</span>
+          </a>
           <!--
             ADMIN, AND IT IS THE QUIETEST THING IN THE MASTHEAD ON PURPOSE.
 
@@ -2285,6 +2325,10 @@
           <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
           <a class="text" href="#stats">Statistics</a>
           <a class="text" id="spine-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+          <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
+            <span>Patreon</span>
+          </a>
         </nav>
       </div>
     </div>
@@ -2469,6 +2513,10 @@
         <a href="#stats">Site statistics</a>
         <a href="bugs.html">Bugs and feedback</a>
         <a id="foot-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+        <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
+          <span>Patreon</span>
+        </a>
       </nav>
     </footer>
 
