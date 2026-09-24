@@ -2134,13 +2134,15 @@
       /* The facts are their own grid rather than more flex children, so a
          row that does not divide evenly wraps into a tidy second row
          instead of orphaning one number under the hero. */
-      /* FOUR columns, not auto-fit. There are eight of these and auto-fit
-         fitted seven across, which left the eighth on a row of its own
-         under the hero looking like a mistake. Four is two clean rows. */
+      /* THREE columns, not auto-fit. There are six of these, and auto-fit
+         can leave one on a row of its own under the hero looking like a
+         mistake. Three is two clean rows. Named pilots and pilots back
+         another day were taken off: a count of twenty names beside a day
+         of hundreds of visitors pulled the eye to the wrong number. */
       .facts {
         flex: 1 1 420px;
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 20px 24px;
       }
       @media (max-width: 719px) {

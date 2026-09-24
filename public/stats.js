@@ -899,7 +899,7 @@ function paintAllTime() {
   plate.append(el('div', 'kicker', 'All time'));
   plate.append(el('h3', null, d.firstDay ? `Since ${longDay(d.firstDay)}` : 'Since counting began'));
   plate.append(el('p', 'plate-note',
-    "Tracks, times and named pilots come from the board's own records, so they include everything from before counting began."));
+    "Tracks and times come from the board's own records, so they include everything from before counting began."));
   const strip = el('div', 'alltime');
   const heroBox = el('div', 'hero-box');
   const hero = el('div', 'hero', count(d.allTime.laps));
@@ -914,8 +914,6 @@ function paintAllTime() {
     [count(d.allTime.countries), 'Countries'],
     [count(d.board.tracks), 'Tracks'],
     [count(d.board.times), 'Times posted'],
-    [count(d.board.pilots), 'Named pilots'],
-    [count(d.board.pilotsOnMoreThanOneDay), 'Back another day'],
   ];
   for (const [value, label] of rows) {
     const fact = el('div', 'fact');
