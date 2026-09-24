@@ -23,9 +23,10 @@
  * them.
  *
  * The bottom half is the PAGE: one request, some counters, two bar charts
- * and three ranked lists. It holds no state the board does not, it polls
- * only while somebody is looking at it, and every chart has a table beside
- * it, because a tooltip is not a way to read a number if you cannot hover.
+ * and two plates of ranked lists. It holds no state the board does not, it
+ * polls only while somebody is looking at it, and every chart has a table
+ * beside it, because a tooltip is not a way to read a number if you cannot
+ * hover.
  *
  * WHY THE CHARTS ARE ONE SERIES EACH. Two series would want two colours,
  * and the two this page has to spare, slate and sakura, come apart by a
@@ -513,7 +514,7 @@ function barChart({
 function dayTip(row) {
   const lines = [
     ['Pilots', count(row.visits)],
-    ['New, returning', `${count(row.newVisitors)} / ${count(row.returningVisitors)}`],
+    ['New / returning', `${count(row.newVisitors)} / ${count(row.returningVisitors)}`],
     ['Sessions', count(row.sessions)],
     ['Laps', count(row.laps)],
     ['Flown', flightTime(row.flightS)],
@@ -594,7 +595,7 @@ function chartTable(rows) {
   box.addEventListener('toggle', () => {
     view.tableOpen = box.open;
   });
-  box.append(el('summary', null, 'As a table'));
+  box.append(el('summary', null, 'Show as a table'));
   const scroll = el('div', 'scroll');
   const table = el('table');
   const head = el('tr');
@@ -717,8 +718,8 @@ function paintFresh() {
       section.classList.add('stale');
     }
     node.textContent = view.data
-      ? `Could not reach the board. Showing what it said ${agoText(age)}.`
-      : 'Could not reach the board.';
+      ? `Can't reach the board. Showing numbers from ${agoText(age)}.`
+      : "Can't reach the board.";
     return;
   }
   node.classList.remove('stale');
@@ -753,7 +754,7 @@ function paintTiles() {
   box.append(tile({
     label: 'Flying now',
     value: count(d.live ? d.live.flying : 0),
-    note: 'Tabs that reported a lap or a heartbeat in the last three minutes.',
+    note: 'Browser tabs that were flying in the last three minutes.',
     live: true,
   }));
   box.append(tile({
@@ -764,7 +765,7 @@ function paintTiles() {
   box.append(tile({
     label: 'Sessions today',
     value: count(t.sessions),
-    note: 'A session is a page load where the quad left the stand.',
+    note: 'Page loads where the quad took off.',
   }));
   box.append(tile({
     label: 'Laps today',
@@ -800,7 +801,7 @@ function paintTrend() {
   plate.append(el('p', 'plate-note',
     `${plural(d.window.visits, 'pilot', 'pilots')}, ${plural(d.window.sessions, 'session', 'sessions')}, `
     + `${plural(d.window.laps, 'lap', 'laps')} and ${flightTime(d.window.flightS)} flown. `
-    + 'Today is the pale bar; the mint tick is the best day.'));
+    + 'Today is the pale bar. The green tick marks the busiest day.'));
   /* The drawing width, measured off the plate that is already on screen
    * rather than off the wrap that is not in the document yet. clientWidth
    * includes the padding, so the padding comes back off. */
@@ -814,14 +815,14 @@ function paintTrend() {
     rows,
     width,
     pick: (r) => r.visits,
-    label: `Pilots per day over the last ${rows.length} days. The table below carries every value.`,
+    label: `Pilots per day over the last ${rows.length} days. The table below lists every value.`,
   }));
   plate.append(chartBlock({
     title: 'Laps per day',
     rows,
     width,
     pick: (r) => r.laps,
-    label: `Laps flown per day over the last ${rows.length} days. The table below carries every value.`,
+    label: `Laps flown per day over the last ${rows.length} days. The table below lists every value.`,
   }));
   plate.append(chartTable(rows));
   if (held && held.chart >= 0) {
@@ -846,7 +847,7 @@ function paintRanks() {
   countries.append(el('div', 'kicker', 'Where from'));
   countries.append(el('h3', null, 'Countries'));
   countries.append(el('p', 'plate-note',
-    'Named by the edge in front of the site from an address this board never stores.'));
+    "Worked out from each visitor's IP address, which is never stored."));
   /* The bar is sessions, the same number the rows are ranked by. It used to
    * fall back to pilots on a row with no sessions, which put a country of
    * five hundred visitors above one of three flights on a list whose
@@ -862,31 +863,11 @@ function paintRanks() {
   }));
   countries.append(el('p', 'rank-more', 'Sessions / pilots.'));
 
-  const sources = byId('stats-sources');
-  sources.textContent = '';
-  sources.append(el('div', 'kicker', 'How they arrived'));
-  sources.append(el('h3', null, 'Direct and sponsors'));
-  sources.append(el('p', 'plate-note',
-    'A sponsor link carries one word. Anything this board does not recognise is counted as Other.'));
-  /* Ranked, barred and printed by PILOTS, which is the number a sponsor
-   * is owed: how many people their poster brought. The board ranks every
-   * dimension by sessions, so the order is redone here to match the bar. */
-  const bySponsorPilots = [...d.sources].sort((a, b) => (b.visits - a.visits)
-    || (b.sessions - a.sessions)
-    || String(a.key).localeCompare(String(b.key)));
-  sources.append(rankList({
-    rows: bySponsorPilots,
-    name: (r) => r.name || r.key,
-    value: (r) => r.visits,
-    note: (r) => `${count(r.visits)} / ${count(r.laps)}`,
-  }));
-  sources.append(el('p', 'rank-more', 'Pilots / laps.'));
-
   const how = byId('stats-how');
   how.textContent = '';
-  how.append(el('div', 'kicker', 'On what'));
+  how.append(el('div', 'kicker', 'Setups'));
   how.append(el('h3', null, 'How they fly'));
-  how.append(el('p', 'plate-note', 'Of the sessions counted in the window.'));
+  how.append(el('p', 'plate-note', `Share of sessions over the last ${d.window.days} days.`));
   const groups = [
     ['Aircraft', d.craft, (k) => CRAFT_NAMES[k] || k],
     ['Input', d.inputs, (k) => INPUT_NAMES[k] || k],
@@ -916,11 +897,9 @@ function paintAllTime() {
   plate.hidden = false;
   plate.textContent = '';
   plate.append(el('div', 'kicker', 'All time'));
-  plate.append(el('h3', null, 'Since this page started counting'));
+  plate.append(el('h3', null, d.firstDay ? `Since ${longDay(d.firstDay)}` : 'Since counting began'));
   plate.append(el('p', 'plate-note',
-    d.firstDay
-      ? `Counting began on ${longDay(d.firstDay)}. The four on the right are the board's own tables rather than counters.`
-      : "The four on the right are the board's own tables rather than counters."));
+    "Tracks, times and named pilots come from the board's own records, so they include everything from before counting began."));
   const strip = el('div', 'alltime');
   const heroBox = el('div', 'hero-box');
   const hero = el('div', 'hero', count(d.allTime.laps));
@@ -956,7 +935,7 @@ function paintOptOut() {
   box.textContent = '';
   if (privacyRefused()) {
     box.append(el('p', 'optout-said',
-      'Your browser asked not to be counted, and it is not.'));
+      'Your browser has Global Privacy Control turned on, so it is not counted.'));
     return;
   }
   const row = el('div', 'optout-row');
@@ -970,13 +949,13 @@ function paintOptOut() {
   row.append(label);
   box.append(row);
   const note = el('p', 'optout-note',
-    'Off means this browser sends nothing at all. The choice is kept in this browser, which is the only place it could be kept.');
+    'Untick it and this browser stops sending anything. The setting is saved in this browser.');
   box.append(note);
   input.addEventListener('change', () => {
     setOptedOut(!input.checked);
     note.textContent = input.checked
-      ? 'Counted. Nothing that identifies you is sent or stored.'
-      : 'Not counted. This browser sends nothing at all.';
+      ? 'Counting is on. Nothing that identifies you is sent or stored.'
+      : 'Counting is off. This browser sends nothing.';
   });
 }
 
@@ -993,8 +972,8 @@ function paintEmpty() {
   const box = el('div', 'empty panel');
   box.append(el('h2', null, 'Nothing counted yet'));
   box.append(el('p', null, d.firstDay
-    ? `Counting started on ${longDay(d.firstDay)}. The first flight will show here.`
-    : 'Counting starts with the first visit after this page was deployed. Fly something and it will show here.'));
+    ? `Counting started on ${longDay(d.firstDay)}. The first flight will show up here.`
+    : 'Fly something and it will show up here.'));
   notice.append(box);
 }
 

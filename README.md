@@ -5,9 +5,9 @@ Every published course lives here, with the times flown on it.
 
 The page has two tabs. **Tracks and times** is the board itself. **Site
 statistics** is a page of counters about the product: how many are flying
-now, pilots and laps by day, which countries, which sponsors' links people
-arrived from, and what they fly on. See [Site statistics](#site-statistics)
-below for what is counted and, more to the point, what is not.
+now, pilots and laps by day, which countries, and what they fly on. See
+[Site statistics](#site-statistics) below for what is counted and, more to
+the point, what is not.
 
 Repository: [Mathew-Harvey/WebFPVSimulator-LeaderBoard](https://github.com/Mathew-Harvey/WebFPVSimulator-LeaderBoard).
 
@@ -290,9 +290,10 @@ address bar on arrival, so a pilot who shares the link they are looking at
 does not attribute their friend to a poster they never saw.
 
 Unset is the right default and means no sponsors: every arrival is `direct`
-or `other`. The per sponsor numbers are public on the statistics tab, on
-purpose, so a sponsor can check them without asking anybody. The list of
-sponsors is not, because it includes the ones with no traffic yet.
+or `other`. The statistics tab does not show the per sponsor numbers; they
+are in the `sources` list that `GET /api/stats` returns, so a sponsor can
+still check them without asking anybody. The list of sponsors is not
+public, because it includes the ones with no traffic yet.
 
 ### The country
 

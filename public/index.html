@@ -1931,13 +1931,13 @@
 
       .stats-row {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 18px;
         align-items: start;
       }
       .stats-row[hidden] { display: none; }
       .stats-row .stats-plate { margin-bottom: 18px; }
-      @media (max-width: 1079px) {
+      @media (max-width: 759px) {
         .stats-row { grid-template-columns: 1fr; gap: 0; }
       }
 
@@ -2460,8 +2460,8 @@
             <div class="kicker">The site</div>
             <h2 class="rule-after" id="stats-title">Site statistics</h2>
             <p class="stats-lede">
-              Counted from the simulator, the track builder and this page.
-              Every number here is a total.
+              Daily totals from the simulator, the track builder and this
+              board.
             </p>
           </div>
           <!-- role="status" rather than role="alert": it changes every
@@ -2473,27 +2473,27 @@
         <div class="panel stats-plate" id="stats-trend" hidden></div>
         <div class="stats-row" id="stats-row" hidden>
           <div class="panel stats-plate" id="stats-countries"></div>
-          <div class="panel stats-plate" id="stats-sources"></div>
           <div class="panel stats-plate" id="stats-how"></div>
         </div>
         <div class="panel stats-plate" id="stats-alltime" hidden></div>
         <div class="panel stats-plate stats-privacy">
-          <div class="kicker">What this counts</div>
-          <h3>Nothing here is about you</h3>
+          <div class="kicker">Privacy</div>
+          <h3>What gets counted</h3>
           <p>
-            Every number on this page is a count. The simulator tells this
-            board that a session started, that laps were flown, and which
-            aircraft and input were used. The board adds one to a daily total
-            and keeps nothing else.
+            Each browser is counted once a day when it opens the simulator,
+            the track builder or this board. When you fly, the simulator also
+            reports which quad, input and map you picked, and how many laps,
+            crashes and seconds of flying followed. The board adds it all to
+            the day's totals and keeps nothing else.
           </p>
           <p>
-            No cookie is set. No address is stored: the edge in front of the
-            site names a country from it, and only the two letter code
-            arrives here. New or returning is worked out by your browser from
-            a date it keeps for itself, and no identifier ever leaves it. A
-            sponsor link is remembered as one word for thirty days, so the
-            board can say which poster somebody walked past, never who they
-            are. Days are UTC.
+            No cookie is set. Your IP address is never stored: the edge in
+            front of the site turns it into a two letter country code, and the
+            board keeps only that code. Your browser decides whether you are
+            new or returning from a date it keeps to itself, and sends just
+            the yes or no. If you came in through a sponsor's link, your
+            browser remembers that sponsor's name for 30 days, so the board
+            knows which sponsor sent a visit but not who you are.
           </p>
           <div class="stats-optout" id="stats-optout"></div>
         </div>
