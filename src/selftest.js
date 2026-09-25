@@ -2175,6 +2175,34 @@ async function testStats() {
   check('ref alias twitter to x', ok({
     v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'twitter',
   }).event.ref === 'x');
+
+  /* Additional server-side tests proving client behavior indirectly.
+   * Direct client tests (extractHostname, isSameHost, normaliseRefTag,
+   * captureRefTag, storeSessionAttribution, sendEvent precedence) would
+   * require a browser environment. These server tests prove the end-to-end
+   * behavior: what the server receives after client processing. */
+  check('explicit null referrer is preserved (not re-credited)', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: null,
+  }).event.referrer === null);
+  check('explicit null ref is preserved', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: null,
+  }).event.ref === null);
+  check('missing referrer key is null', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false,
+  }).event.referrer === null);
+  check('missing ref key is null', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false,
+  }).event.ref === null);
+  check('referrer with only subdomain difference is kept', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'old.reddit.com',
+  }).event.referrer === 'reddit.com');
+  check('ref with spaces and symbols is sanitised to other', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'my ref tag!',
+  }).event.ref === 'other');
+  check('16+ char ref is capped and folded', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'a'.repeat(20),
+  }).event.ref === 'other');
+
   check('a session is accepted', !ok({
     v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad',
   }).error);

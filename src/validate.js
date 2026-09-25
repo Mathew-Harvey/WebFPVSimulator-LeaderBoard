@@ -1374,11 +1374,13 @@ export function inspectRun(body) {
  *
  * NOTHING IDENTIFYING IS ACCEPTED, so nothing identifying can be stored by
  * mistake later. There is no field for an address, a user agent, a screen
- * size, a referrer, a pilot name or a track id, and an event carrying one
- * is not cleaned of it: the extra key is simply never read. The one string
- * that travels per tab, `tab`, is a random value the browser makes fresh on
+ * size, a pilot name or a track id, and an event carrying one is not
+ * cleaned of it: the extra key is simply never read. The one string that
+ * travels per tab, `tab`, is a random value the browser makes fresh on
  * every page load, is held in memory by the server for three minutes to
  * answer "how many are flying now", and is never written to the store.
+ * Referrer domain and ref tag ARE accepted, but both are folded to closed
+ * lists server-side, so a stranger with curl cannot grow the table.
  *
  * EVERY DIMENSION IS A CLOSED LIST. A source folds to a sponsor slug or to
  * `other`, a country to two capitals or to `ZZ`, and craft, map, input and

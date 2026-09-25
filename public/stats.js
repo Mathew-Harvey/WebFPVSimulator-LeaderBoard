@@ -198,8 +198,9 @@ export function heldSource() {
 /*
  * EXTRACT THE REFERRER DOMAIN, stripping the protocol and path.
  *
- * Referrer is captured at visit time only, never stored, and only the domain
- * is sent. A full URL would be personal data; a domain is attribution.
+ * Referrer is captured at visit time and stored in sessionStorage for the
+ * duration of that session. Only the domain is sent; a full URL would be
+ * personal data, a domain is attribution.
  *
  * PREFERS AN EXPLICIT ?referrer= PARAMETER over document.referrer. This is
  * the carry-through from the landing page: when a visitor arrives from an
@@ -232,7 +233,10 @@ function isSameHost(hostname, loc) {
   if (!hostname || !loc) {
     return false;
   }
-  return hostname === loc.hostname;
+  /* Strip leading www. so www.webfpv.org and webfpv.org are treated as
+   * same-origin. */
+  const stripWww = (h) => (h && h.startsWith('www.') ? h.slice(4) : h);
+  return stripWww(hostname) === stripWww(loc.hostname);
 }
 
 export function referrerDomain(doc = document, loc = window.location) {
@@ -360,16 +364,13 @@ const SESSION_ATTR_KEY = 'webfpv.session.attribution';
 
 function storeSessionAttribution(referrer, ref) {
   try {
-    const attr = {};
-    if (referrer) {
-      attr.referrer = referrer;
-    }
-    if (ref) {
-      attr.ref = ref;
-    }
-    if (Object.keys(attr).length > 0) {
-      sessionStorage.setItem(SESSION_ATTR_KEY, JSON.stringify(attr));
-    }
+    /* Always write both keys. A null value clears the stale sessionStorage
+     * value, so don't skip the write when both are null. */
+    const attr = {
+      referrer: referrer || null,
+      ref: ref || null,
+    };
+    sessionStorage.setItem(SESSION_ATTR_KEY, JSON.stringify(attr));
   } catch (e) {
     /* Private mode or storage full. Non-fatal: attribution just won't
      * persist to later events. */
@@ -409,12 +410,15 @@ export function sendEvent(payload, url) {
     return false;
   }
   const attr = sessionAttribution();
+  /* Use 'in' operator to distinguish explicit null from missing key. An
+   * explicit null (e.g. same-origin visit) must not be re-credited from a
+   * stale session value. */
   const body = JSON.stringify({
     v: 1,
     ...payload,
     source: heldSource(),
-    referrer: payload.referrer || attr.referrer || null,
-    ref: payload.ref || attr.ref || null,
+    referrer: 'referrer' in payload ? payload.referrer : (attr.referrer || null),
+    ref: 'ref' in payload ? payload.ref : (attr.ref || null),
   });
   try {
     if (navigator.sendBeacon) {
