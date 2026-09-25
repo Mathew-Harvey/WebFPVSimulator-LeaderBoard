@@ -768,8 +768,14 @@ async function testMaps() {
   check('a kind the board does not know is drawn as other, not refused', drawn.plan.marks[2].k === 'other');
   check('a drawing with more outlines than the map has pieces is refused',
     Boolean(inspectMapPlan({ marks: Array.from({ length: 9 }, () => ({ t: 'tree', p: [[1, 1], [2, 2]] })) }, ok).error));
-  check('an outline off the plot is refused',
-    Boolean(inspectMapPlan({ marks: [{ t: 'tree', p: [[1, 1], [9999, 2]] }] }, ok).error));
+  /* Left off the drawing, not refused: it was refused until the builder
+   * side was written on 2026-09-25, when it turned out a piece dragged off
+   * the plot would keep the whole map off the board over its outline. */
+  const stray = inspectMapPlan({ marks: [{ t: 'tree', p: [[1, 1], [2, 2]] }, { t: 'tree', p: [[1, 1], [9999, 2]] }] }, ok);
+  check('an outline far off the plot is left off the drawing, and the rest kept',
+    !stray.error && stray.plan.marks.length === 1 && stray.plan.marks[0].p[1][0] === 2, stray.error);
+  check('an outline that is not numbers is still refused',
+    Boolean(inspectMapPlan({ marks: [{ t: 'tree', p: [[1, 1], ['x', 2]] }] }, ok).error));
 
   /* One contract, two writers, the same check summaryOf and rowToSummary
    * already live under. */
@@ -984,10 +990,19 @@ async function testHttp() {
     const html = await fetch('http://127.0.0.1:3199/').then((r) => r.text());
     check('the page is served', html.includes('Tracks and Statistics') && html.includes('app.js'));
     /* The two tabs are in the MARKUP rather than built by the script, so a
-     * pasted #stats link works on a board whose track list failed to load
-     * and a reader with no JavaScript still sees what this page holds. */
-    check('the page carries both tabs', html.includes('id="tab-tracks"') && html.includes('id="tab-stats"'));
+     * pasted #maps link works on a board whose track list failed to load
+     * and a reader with no JavaScript still sees what this page holds.
+     *
+     * The second tab was the statistics until 2026-09-25, when the owner
+     * moved them to the masthead beside Admin and gave the tab to the
+     * freestyle maps. The statistics are still an address, #stats, so the
+     * old tab id is asserted gone and the link that replaced it present. */
+    check('the page carries both tabs',
+      html.includes('id="tab-tracks"') && html.includes('id="tab-maps"') && !html.includes('id="tab-stats"'));
+    check('the maps section is in the markup', html.includes('id="view-maps"'));
     check('the statistics section is in the markup', html.includes('id="view-stats"'));
+    check('the statistics link sits beside Admin in the masthead',
+      /<a class="text" id="stats-link" href="#stats">Site statistics<\/a>\s*<!--[\s\S]*?-->\s*<button[^>]*id="admin-open"/.test(html));
     /* The promise, in the one place a visitor reads it. If this sentence
      * ever stops being true the check below is the thing that has to be
      * argued with rather than quietly deleted. */
@@ -1041,14 +1056,17 @@ async function testHttp() {
     const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
       simAnchors.length === 7 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
-    /* Six: the card's Fly, the sheet's Fly and Remix, the header and
+    /* Ten: the card's Fly, the sheet's Fly and Remix, the header and
      * footer rewrite helper, the empty-page Build link, and the chase link
-     * builder the podium and the sheet's table both go through. Credits
-     * uses the same rewrite helper.
+     * builder the podium and the sheet's table both go through, which is
+     * six; then the freestyle maps tab's four, the map card's Fly, the map
+     * sheet's Fly and Remix, and its empty tab's Build a map. Credits uses
+     * the same rewrite helper.
      *
      * It was eight while the freestyle board had a Fly button on an empty
      * table and another under a full one. That board is gone, so those two
-     * links are gone, and the number moved because the page did.
+     * links are gone, and the number moved because the page did. It went
+     * from six to ten on 2026-09-25 for the same reason: the maps tab.
      *
      * The number is the point of the check rather than a detail of it: a
      * new link that forgets the tab name opens a fresh simulator on every
@@ -1056,7 +1074,7 @@ async function testHttp() {
      * and the page looks perfectly correct while doing it. */
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
-      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 6);
+      && (app.match(/\.target = SIM_WINDOW/g) || []).length === 10);
     check('nothing app.js builds opens a bare new tab or asks for noopener',
       !app.includes("'_blank'") && !app.includes("noopener'"));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');

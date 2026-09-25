@@ -1,5 +1,5 @@
 /*
- * plan.js: a published track, drawn as a plan.
+ * plan.js: a published track or freestyle map, drawn as a plan.
  *
  * Every track on the board already ships a plan in the list payload: the
  * field size, the things that stand on it, and the flown line in flying
@@ -660,6 +660,96 @@ function order(type) {
   return 2;
 }
 
+/*
+ * A FREESTYLE MAP, drawn from the outlines the builder measured.
+ *
+ * A track's marks are a centre and a heading, and this file knows how to
+ * draw each kind of gate from those. A map's marks are OUTLINES, because
+ * this page must not know what a crane looks like: pieces are added to the
+ * simulator all the time, and a drawing here per piece would be a list of
+ * pieces that a new one is missing from. So the builder, which draws every
+ * piece on its own 2D canvas, sends the ground outline of each one, and
+ * this fills and strokes polygons by a KIND that only picks the colour.
+ * See inspectMapPlan in the board's src/validate.js.
+ *
+ * Buildings and every other solid are cream, the builder's lit colour.
+ * A named gap is amber, the colour of the thing being scored, and on the
+ * big drawing in the sheet it carries its name the way the simulator's
+ * gap labels do. The start is mint, as it is on every track. Paint on the
+ * ground is a dashed sakura edge, because it is not solid.
+ */
+const MAP_INK = {
+  structure: { fill: 'rgba(247, 232, 205, 0.16)', edge: 'rgba(247, 232, 205, 0.72)' },
+  obstacle: { fill: 'rgba(247, 232, 205, 0.12)', edge: 'rgba(247, 232, 205, 0.55)' },
+  aperture: { fill: 'rgba(219, 232, 243, 0.10)', edge: '#dbe8f3' },
+  marker: { fill: 'rgba(247, 232, 205, 0.30)', edge: 'rgba(247, 232, 205, 0.62)' },
+  start: { fill: 'rgba(125, 255, 180, 0.18)', edge: '#7dffb4' },
+  decal: { fill: 'rgba(232, 168, 184, 0.10)', edge: 'rgba(232, 168, 184, 0.70)', dash: [3, 3] },
+  gap: { fill: 'rgba(255, 212, 92, 0.18)', edge: '#ffd45c' },
+  other: { fill: 'rgba(157, 179, 200, 0.14)', edge: 'rgba(157, 179, 200, 0.6)' },
+};
+
+/* Solids first, so a named gap and the start are never under a roof. */
+const MAP_ORDER = {
+  decal: 0, structure: 1, obstacle: 2, other: 3, marker: 4, aperture: 5, start: 6, gap: 7,
+};
+
+export function isMapPlan(plan) {
+  return Boolean(plan) && Array.isArray(plan.marks) && plan.marks.some((m) => m && Array.isArray(m.p));
+}
+
+function mapMarks(ctx, box, marks, withNames) {
+  const sorted = [...marks]
+    .filter((m) => m && Array.isArray(m.p) && m.p.length >= 2)
+    .sort((a, b) => (MAP_ORDER[a.k] ?? 3) - (MAP_ORDER[b.k] ?? 3));
+  for (const mark of sorted) {
+    const ink = MAP_INK[mark.k] || MAP_INK.other;
+    const pts = mark.p.map(([x, y]) => toScreen(box, x, y));
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const p of pts.slice(1)) {
+      ctx.lineTo(p.x, p.y);
+    }
+    if (pts.length > 2) {
+      ctx.closePath();
+      ctx.fillStyle = ink.fill;
+      ctx.fill();
+    }
+    if (ink.dash) {
+      ctx.setLineDash(ink.dash);
+    }
+    ctx.strokeStyle = ink.edge;
+    /* A gap is the one line a reader is looking for, so it is heavier, and
+     * a thumbnail of a 160 m plot still shows a 4 m window as a stroke. */
+    ctx.lineWidth = mark.k === 'gap' ? 2 : 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (!withNames) {
+    return;
+  }
+  ctx.save();
+  ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  for (const mark of sorted) {
+    if (mark.k !== 'gap' || !mark.n) {
+      continue;
+    }
+    const pts = mark.p.map(([x, y]) => toScreen(box, x, y));
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+    const top = Math.min(...pts.map((p) => p.y));
+    const label = mark.n.toUpperCase();
+    const wide = ctx.measureText(label).width + 8;
+    ctx.fillStyle = 'rgba(8, 13, 18, 0.78)';
+    ctx.fillRect(cx - wide / 2, top - 17, wide, 13);
+    ctx.fillStyle = '#ffd45c';
+    ctx.fillText(label, cx, top - 5);
+  }
+  ctx.restore();
+}
+
 export function drawPlan(canvas, plan, options = {}) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const rect = canvas.getBoundingClientRect();
@@ -684,6 +774,13 @@ export function drawPlan(canvas, plan, options = {}) {
   plate(ctx, w, h, box);
   grid(ctx, box);
   if (!plan) {
+    return true;
+  }
+  if (options.map || isMapPlan(plan)) {
+    mapMarks(ctx, box, plan.marks || [], Boolean(options.scaleBar));
+    if (options.scaleBar) {
+      scaleBar(ctx, box, w, h);
+    }
     return true;
   }
   raceLine(ctx, box, plan.path);
@@ -770,6 +867,16 @@ export function planLabel(track) {
    * room a field is the one word that would make the sentence wrong. */
   const where = plan.trackClass === 'micro' ? 'room' : 'field';
   return `Plan of ${track.name}, ${gates} in a ${w} by ${d} metre ${where}.`;
+}
+
+/* The map's twin of planLabel: what a screen reader is told the drawing
+ * is. A plot, not a field, because there is nothing on it to race. */
+export function mapPlanLabel(map) {
+  const plan = map.plan || {};
+  const w = Math.round(Number(plan.width) || 0);
+  const d = Math.round(Number(plan.depth) || 0);
+  const pieces = map.pieces === 1 ? '1 piece' : `${map.pieces} pieces`;
+  return `Plan of ${map.name}, ${pieces} on a ${w} by ${d} metre plot.`;
 }
 
 export function fieldSize(track) {

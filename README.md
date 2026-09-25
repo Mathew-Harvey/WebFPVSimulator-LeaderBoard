@@ -3,9 +3,13 @@
 The public board for [WebFPVSimulator](https://github.com/Mathew-Harvey/WebFPVSimulator).
 Every published course lives here, with the times flown on it.
 
-The page has two tabs. **Tracks and times** is the board itself. **Site
-statistics** is a page of counters about the product: how many are flying
-now, pilots and laps by day, which countries, and what they fly on. See
+The page has two tabs. **Tracks and times** is the board itself. **Freestyle
+maps** is every map published from the track builder's freestyle canvas:
+no gates and no clock, so no times, and a card per map drawn from the
+outlines of its pieces. See [Freestyle maps](#freestyle-maps) below for how
+a map is stored. **Site statistics**, in the masthead beside Admin, is a
+page of counters about the product: how many are flying now, pilots and
+laps by day, which countries, and what they fly on. See
 [Site statistics](#site-statistics) below for what is counted and, more to
 the point, what is not.
 
@@ -125,6 +129,11 @@ to create things in, is in
 | GET | `/api/tracks/:id/gif` | That room's card animation, as `image/gif` |
 | POST | `/api/tracks/:id/gif` | Upload `{ gif, editKey? }`. Rooms only |
 | POST | `/api/tracks/:id/remove` | Take it off the board. Admin only |
+| GET | `/api/maps` | Every published freestyle map, each with its drawing and no document |
+| GET | `/api/maps/:id` | That map's summary |
+| GET | `/api/maps/:id/document` | The map document as published, sponsor prints put back whole |
+| POST | `/api/maps` | Publish `{ author, document, plan?, editKey? }` |
+| POST | `/api/maps/:id/remove` | Take it off the board. Admin only |
 | POST | `/api/admin/login` | Sign in `{ email, password }`, get a session token |
 | GET | `/api/admin/session` | Who the bearer token is, or a 401 |
 | GET | `/api/config` | `{ simOrigin, boardOrigin }` |
@@ -207,6 +216,48 @@ with the track, and the id is free to publish again afterwards, which is
 what makes this the way to replace a track published from a browser
 nobody still has. The service logs the removal and who did it.
 
+## Freestyle maps
+
+A map is published the way a track is, to its own routes: nothing that
+reads `/api/tracks` ever sees one, so no track reader can fly a map as a
+track, and a map's edit key is kept apart from the track keys in the
+simulator for the same reason.
+
+**A map is stored as references, not as models.** The document the
+builder sends is already a list of pieces, each one a type and the
+modifiers that place it: position, heading, size, style, variant, a named
+gap's name and points. The Hibari Yard starter is 52 pieces in about nine
+kilobytes. No geometry travels and none is stored: the simulator builds
+every piece from its own catalogue when the map is flown.
+
+**A sponsor print is stored once, however many maps wear it.** The only
+heavy thing a map carries is its logos, up to five embedded images. On
+publish each one is taken out of the document into the `assets` table,
+keyed by the sha256 of its bytes, and the document keeps `asset:<hash>` in
+its place. `map_assets` records which map wears which picture, so removing
+or republishing a map drops a picture only when no other map still wears
+it. `GET /api/maps/:id/document` puts the images back, so the simulator is
+handed exactly what the builder sent.
+
+**The board keeps no list of piece types.** Pieces are added to the
+simulator all the time, so a type is checked only for being a plausible
+name, and the card's drawing is sent by the builder beside the document:
+the ground outline of each piece, measured by the same code that draws the
+builder's own 2D view, with a kind that picks its colour here. A piece
+added next week is drawn on this board with nothing here changing. An
+outline far off the plot is left off the drawing rather than refusing the
+map. See `inspectMap` and `inspectMapPlan` in `src/validate.js`.
+
+A Fly link looks like this, and flies the map in the simulator's own
+freestyle world without replacing the pilot's own map there:
+
+```
+{sim}/?map=built&mapshare=trk-1a2b3c4d&board={this origin}&craft=5inch&fly=1
+```
+
+Taking a map off the board is the track's route with `maps` in it, from the
+map's sheet or with `BOARD_ADMIN_TOKEN`.
+
 ## The card animation
 
 A room's card on the board is an animation of one lap of it, not a plan.
@@ -229,7 +280,9 @@ the board, and the simulator's Ghost row lists them as rivals.
 
 ## Site statistics
 
-The second tab. It is **counters, never events**: the store holds one row
+Opened from the masthead's **Site statistics** link, beside Admin, and at
+`#stats`. It was the second tab until the freestyle maps took that place. It
+is **counters, never events**: the store holds one row
 per UTC day and one row per day per dimension, and that is the finest grain
 there is. There is no row anywhere in this repository that describes one
 visitor, one visit or one lap.

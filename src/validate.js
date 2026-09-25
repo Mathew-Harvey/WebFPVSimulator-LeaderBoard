@@ -919,7 +919,8 @@ export function inspectMap(raw) {
  * every piece's outline on its own 2D canvas, sends those outlines beside
  * the document when it publishes, and this checks that they are a drawing
  * and nothing else: at most one outline per piece, a handful of points
- * each, every number finite and near the plot. A piece added to the
+ * each, every number finite, and an outline far off the plot left off the
+ * drawing rather than refused. A piece added to the
  * simulator next week is drawn on this board by the builder that knows it.
  *
  * { width, depth, marks: [{ t, k, p: [[x, y], ...], n? }] }: the piece's
@@ -956,11 +957,21 @@ export function inspectMapPlan(raw, inspected) {
       return { error: 'That map’s drawing is not readable.' };
     }
     const points = [];
+    let far = false;
     for (const pt of mark.p) {
-      if (!Array.isArray(pt) || pt.length !== 2 || !finiteWithin(pt[0], reach) || !finiteWithin(pt[1], reach)) {
-        return { error: 'That map’s drawing reaches off the plot.' };
+      if (!Array.isArray(pt) || pt.length !== 2 || !finiteWithin(pt[0], MAP_COORD_MAX) || !finiteWithin(pt[1], MAP_COORD_MAX)) {
+        return { error: 'That map’s drawing is not readable.' };
       }
+      far = far || Math.abs(pt[0]) > reach || Math.abs(pt[1]) > reach;
       points.push([metres(pt[0]), metres(pt[1])]);
+    }
+    /* A piece dragged far out past the plot is left off the drawing rather
+     * than refusing the map. The document may hold it (a piece is anywhere
+     * within MAP_COORD_MAX), the builder warns about it, and the drawing is
+     * a courtesy: one stray outline is not a reason to keep a map off the
+     * board. A number that is not a number is still refused, above. */
+    if (far) {
+      continue;
     }
     const out = { t: mark.t, k: MAP_PLAN_KINDS.includes(mark.k) ? mark.k : 'other', p: points };
     if (typeof mark.n === 'string' && mark.n.trim()) {

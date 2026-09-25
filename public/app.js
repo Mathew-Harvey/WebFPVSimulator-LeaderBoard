@@ -18,6 +18,14 @@
  * Fly this track opens the simulator with ?share=id, which is the whole
  * of the link between the two sites.
  *
+ * The second tab is the freestyle maps, built on the same pattern from one
+ * more request, /api/maps: a card per map with its drawing, a sheet per map
+ * at #map=id, and Fly this map, which opens the simulator's own freestyle
+ * world with ?mapshare=id. A map has no times, so where a track has a
+ * podium and standings a map has the gaps its builder named. The site
+ * statistics that used to be that tab are the masthead's Site statistics
+ * link now, still at #stats.
+ *
  * This file is part of WebFPVLeaderboard.
  *
  * WebFPVLeaderboard is free software: you can redistribute it and/or modify
@@ -38,7 +46,7 @@ import { guessSimOrigin as guess, landingOrigin as frontDoor } from './origins.j
 import { mountStats, pingVisit, showStats } from './stats.js';
 import { fillCredits } from './credits.js';
 import {
-  fieldSize, paintPlans, planCanvas, planLabel,
+  fieldSize, mapPlanLabel, paintPlans, planCanvas, planLabel,
 } from './plan.js';
 
 /*
@@ -374,6 +382,48 @@ function courseHref(id) {
 }
 
 /*
+ * A FREESTYLE MAP'S THREE LINKS, the twins of the three above.
+ *
+ * ?map=built is the simulator's world for every map built in the builder,
+ * ?mapshare= says which published one, and ?board= says where to fetch it
+ * from, exactly as ?share= and ?board= do for a track. ?craft=5inch and
+ * ?fly=1 are the builder's own Fly this map: a map is flown on the five
+ * inch, and a press that says "fly this map" has already answered every
+ * question the title would ask. See linkedFly in the simulator's
+ * src/ui/ui.js. The builder takes ?mode=freestyle to open on its map
+ * canvas, which is where a map has to land to be remixed.
+ */
+function mapFlyHref(config, id) {
+  const board = encodeURIComponent(config.boardOrigin);
+  return `${config.simOrigin}/?map=built&mapshare=${encodeURIComponent(id)}&board=${board}&craft=5inch&fly=1`;
+}
+
+function mapRemixHref(config, id) {
+  const board = encodeURIComponent(config.boardOrigin);
+  return `${config.simOrigin}/src/trackbuilder/index.html?mapshare=${encodeURIComponent(id)}&board=${board}&mode=freestyle`;
+}
+
+/* Relative against simOrigin with a trailing slash, for the reason given
+ * in orbitHref. ?v= is the map's last update: the simulator keeps the clip
+ * it records in the visitor's browser under a key that includes it, so a
+ * map republished with a new layout records a new flight rather than
+ * showing the old one for as long as the cache lives. */
+function mapOrbitHref(config, map) {
+  const u = new URL('src/share/orbit.html', `${config.simOrigin}/`);
+  u.searchParams.set('map', 'built');
+  u.searchParams.set('mapshare', map.id);
+  u.searchParams.set('board', config.boardOrigin);
+  if (map.updatedUtc) {
+    u.searchParams.set('v', map.updatedUtc);
+  }
+  return u.href;
+}
+
+function mapHref(id) {
+  return `#map=${encodeURIComponent(id)}`;
+}
+
+/*
  * The credits roll lives on the simulator at #credits. This board used to
  * paint a second copy, and the two drifted. One page, not two.
  *
@@ -431,6 +481,21 @@ const state = {
   craft: 'full',
   openId: null,
   lastFocus: null,
+  /*
+   * THE MAPS TAB'S OWN HALF. Its own search, author and order rather than
+   * the tracks tab's, because somebody who searched the tracks for a pilot
+   * and then looks at the maps has not searched the maps. mapsState is
+   * 'loading', 'ready' or 'failed', so the tab can tell "nothing published"
+   * from "not answered yet" from "the request failed", which are three
+   * different sentences.
+   */
+  maps: [],
+  mapsState: 'loading',
+  mapsError: '',
+  mapQuery: '',
+  mapSort: 'newest',
+  mapAuthor: '',
+  openMapId: null,
 };
 
 /* The tag vocabulary, as the board describes it. Served rather than written
@@ -548,10 +613,11 @@ function tagCounts(pool) {
   return by;
 }
 
-/* The authors on the board, most tracks first, then alphabetical. */
-function authors() {
+/* The authors on the board, most tracks first, then alphabetical. The maps
+ * tab asks the same question of its own list. */
+function authors(pool = state.courses) {
   const by = new Map();
-  for (const track of state.courses) {
+  for (const track of pool) {
     const name = String(track.author || '');
     by.set(name, (by.get(name) || 0) + 1);
   }
@@ -941,18 +1007,14 @@ function paintTags() {
   }
 }
 
-function paintAuthors() {
-  const select = byId('by');
-  if (!select) {
-    return;
-  }
-  const held = state.author;
+/* Fill a Built by select from a list and hand back what it now says. */
+function fillAuthors(select, pool, held) {
   select.textContent = '';
   const any = document.createElement('option');
   any.value = '';
   any.textContent = 'Anyone';
   select.append(any);
-  for (const [name, n] of authors()) {
+  for (const [name, n] of authors(pool)) {
     const opt = document.createElement('option');
     opt.value = name;
     opt.textContent = n > 1 ? `${name} (${n})` : name;
@@ -961,7 +1023,15 @@ function paintAuthors() {
   /* An author who deleted their last track between paints must not leave
    * the filter pointing at a name with nothing behind it. */
   select.value = [...select.options].some((o) => o.value === held) ? held : '';
-  state.author = select.value;
+  return select.value;
+}
+
+function paintAuthors() {
+  const select = byId('by');
+  if (!select) {
+    return;
+  }
+  state.author = fillAuthors(select, state.courses, state.author);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1073,6 +1143,299 @@ function paintRail() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Freestyle maps                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * THE SECOND TAB, AND IT IS THE TRACKS TAB WITHOUT THE CLOCK.
+ *
+ * A freestyle map is a plot with things standing on it and no flying
+ * order, so it has no times, no record and no standings, and what the
+ * tracks tab spends on those this tab spends on the one thing a map has
+ * instead: the gaps its builder named. Each summary in /api/maps carries
+ * its own drawing, so the whole tab costs one request and no WebGL.
+ *
+ * The drawing is the outlines the builder measured rather than a picture
+ * per piece, and so is everything here: this page never asks what a piece
+ * IS, only what it is called and where it stands. See mapMarks in plan.js.
+ */
+function mapById(id) {
+  return state.maps.find((m) => m.id === id) || null;
+}
+
+/* Newest first by default, because a map has no times to rank by and the
+ * question a returning visitor asks of this tab is what is new. */
+const MAP_SORTS = {
+  newest: (a, b) => String(b.publishedUtc || '').localeCompare(String(a.publishedUtc || '')),
+  biggest: (a, b) => (b.pieces || 0) - (a.pieces || 0)
+    || String(b.publishedUtc || '').localeCompare(String(a.publishedUtc || '')),
+  gaps: (a, b) => (b.gaps || 0) - (a.gaps || 0) || (b.pieces || 0) - (a.pieces || 0),
+  name: (a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }),
+};
+
+/* The names a map's builder gave its gaps, in the order the drawing lists
+ * them, each once. The drawing is the only place a summary carries them. */
+function gapNamesOf(map) {
+  const seen = new Set();
+  const names = [];
+  for (const mark of (map.plan && map.plan.marks) || []) {
+    const name = mark && mark.k === 'gap' ? String(mark.n || '').trim() : '';
+    if (name && !seen.has(name.toLowerCase())) {
+      seen.add(name.toLowerCase());
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/* A gap's name is searchable, because "the arch" is how a pilot remembers
+ * a map somebody showed them. */
+function mapMatches(map, needle) {
+  if (!needle) {
+    return true;
+  }
+  if (String(map.name).toLowerCase().includes(needle)
+    || String(map.author).toLowerCase().includes(needle)) {
+    return true;
+  }
+  return gapNamesOf(map).some((name) => name.toLowerCase().includes(needle));
+}
+
+function visibleMaps() {
+  const needle = state.mapQuery.trim().toLowerCase();
+  const compare = MAP_SORTS[state.mapSort] || MAP_SORTS.newest;
+  return state.maps
+    .filter((m) => mapMatches(m, needle) && (!state.mapAuthor || String(m.author) === state.mapAuthor))
+    .sort(compare);
+}
+
+function mapCardFor(map, config) {
+  const card = el('article', 'card');
+  card.dataset.map = map.id;
+
+  const tile = el('a', 'tile');
+  tile.href = mapHref(map.id);
+  tile.setAttribute('aria-label', `${map.name}, plan and detail`);
+  tile.append(planCanvas(map.plan, mapPlanLabel(map), { map: true }));
+  const size = fieldSize(map);
+  if (size) {
+    tile.append(el('span', 'tile-chip', size));
+  }
+  card.append(tile);
+
+  const body = el('div', 'body');
+  const head = el('div', 'head');
+  head.append(el('h2', null, map.name));
+  const by = el('p', 'by');
+  by.append('by ');
+  by.append(el('b', null, map.author));
+  by.append(` · ${plural(map.pieces, 'piece', 'pieces')}`);
+  head.append(by);
+  body.append(head);
+
+  /* The named gaps where a track has its tags: what the map is FOR, in its
+   * builder's own words. Six at most on a card; the sheet has them all. */
+  const names = gapNamesOf(map);
+  const gaps = el('div', 'gaps');
+  for (const name of names.slice(0, 6)) {
+    gaps.append(el('span', null, name));
+  }
+  if (names.length > 6) {
+    gaps.append(el('span', null, `+${names.length - 6}`));
+  }
+  body.append(gaps);
+  /* A map whose drawing did not come with it still has its count, which
+   * the board took from the document itself. */
+  if (!names.length) {
+    body.append(el('p', 'none', map.gaps
+      ? `${plural(map.gaps, 'named gap', 'named gaps')} on the plot.`
+      : 'No named gaps. The whole plot is yours.'));
+  }
+
+  const actions = el('div', 'actions');
+  const fly = el('a', 'btn primary small', 'Fly this map');
+  fly.href = mapFlyHref(config, map.id);
+  fly.target = SIM_WINDOW;
+  fly.setAttribute('aria-label', `Fly ${map.name}, opens it in the simulator tab`);
+  const more = el('a', 'text more', 'Map detail');
+  more.href = mapHref(map.id);
+  actions.append(fly, more);
+  body.append(actions);
+
+  card.append(body);
+  return card;
+}
+
+function paintMapAuthors() {
+  const select = byId('map-by');
+  if (!select) {
+    return;
+  }
+  state.mapAuthor = fillAuthors(select, state.maps, state.mapAuthor);
+}
+
+function paintMapGrid() {
+  const list = byId('map-list');
+  const notice = byId('map-notice');
+  const count = byId('map-count');
+  const toolbar = byId('map-toolbar');
+  if (!list || !notice) {
+    return;
+  }
+  list.textContent = '';
+  notice.textContent = '';
+  if (toolbar) {
+    toolbar.hidden = !state.maps.length;
+  }
+  if (state.mapsState === 'loading') {
+    skeletons(list, 3);
+    return;
+  }
+  if (state.mapsState === 'failed') {
+    notice.append(el('div', 'status panel', state.mapsError || 'The maps could not be loaded.'));
+    return;
+  }
+  if (!state.maps.length) {
+    const box = el('div', 'empty panel');
+    box.append(el('h2', null, 'No maps published yet'));
+    box.append(el('p', null, 'Build one on the track builder’s Freestyle canvas and press Publish. This tab starts when the first map lands.'));
+    const build = el('a', 'btn primary', 'Build a map');
+    build.href = `${state.config.simOrigin}/src/trackbuilder/index.html?mode=freestyle`;
+    build.target = SIM_WINDOW;
+    box.append(build);
+    notice.append(box);
+    return;
+  }
+  const shown = visibleMaps();
+  for (const map of shown) {
+    list.append(mapCardFor(map, state.config));
+  }
+  paintPlans(list);
+  if (count) {
+    count.textContent = shown.length === state.maps.length
+      ? plural(state.maps.length, 'map', 'maps')
+      : `${shown.length} of ${plural(state.maps.length, 'map', 'maps')}`;
+  }
+  if (shown.length) {
+    return;
+  }
+  /* Say which filter emptied the list, as the tracks tab does. */
+  const parts = [];
+  if (state.mapQuery.trim()) {
+    parts.push(`the search "${state.mapQuery.trim()}"`);
+  }
+  if (state.mapAuthor) {
+    parts.push(`maps built by ${state.mapAuthor}`);
+  }
+  const box = el('div', 'empty panel');
+  box.append(el('h2', null, 'Nothing matches that'));
+  box.append(el('p', null, parts.length
+    ? `No map on the board is ${joined(parts)}.`
+    : 'No map on the board answers to that.'));
+  const clear = el('button', 'btn small', 'Clear the filters');
+  clear.type = 'button';
+  clear.addEventListener('click', () => {
+    const find = byId('map-find');
+    const by = byId('map-by');
+    state.mapQuery = '';
+    state.mapAuthor = '';
+    if (find) {
+      find.value = '';
+    }
+    if (by) {
+      by.value = '';
+    }
+    paintMapGrid();
+    if (find) {
+      find.focus();
+    }
+  });
+  box.append(clear);
+  notice.append(box);
+}
+
+/*
+ * The maps tab's rail. A track's rail ranks pilots by records held; a map
+ * has no records, so this one ranks builders by maps published and lists
+ * what landed lately. Not beside a single map, because a rail beside one
+ * card is that card again.
+ */
+function paintMapRail() {
+  const rail = byId('map-rail');
+  const deck = byId('map-deck');
+  if (!rail || !deck) {
+    return;
+  }
+  rail.textContent = '';
+  if (state.maps.length < 2) {
+    rail.hidden = true;
+    deck.classList.remove('has-rail');
+    return;
+  }
+  rail.hidden = false;
+  deck.classList.add('has-rail');
+
+  const builders = railBlock('Builders', 'Who builds them');
+  authors(state.maps).slice(0, 8).forEach(([name, n], i) => {
+    const pieces = state.maps
+      .filter((m) => String(m.author || '') === name)
+      .reduce((sum, m) => sum + (m.pieces || 0), 0);
+    const row = el('div', `standing p${i + 1}`);
+    row.append(el('span', 'rk', String(i + 1)));
+    row.append(el('span', 'nm', name));
+    row.append(el('span', 'sc', String(n)));
+    row.append(el('span', 'mt', joined([
+      n === 1 ? 'map published' : 'maps published',
+      plural(pieces, 'piece placed', 'pieces placed'),
+    ])));
+    builders.append(row);
+  });
+  builders.append(el('p', 'rail-note', 'Ranked by maps published.'));
+  rail.append(builders);
+
+  const lately = railBlock('Lately', 'Maps published');
+  const list = el('div', 'feed');
+  for (const map of [...state.maps].sort(MAP_SORTS.newest).slice(0, 6)) {
+    const line = el('div', 'feed-row');
+    line.append(el('span', 'nm', map.author));
+    line.append(el('span', 'rail-time', plural(map.pieces, 'piece', 'pieces')));
+    const on = el('a', 'on', map.name);
+    on.href = mapHref(map.id);
+    line.append(on);
+    line.append(el('span', 'ago', formatAgo(map.publishedUtc)));
+    list.append(line);
+  }
+  lately.append(list);
+  rail.append(lately);
+}
+
+/*
+ * The maps list, asked for on its own and never waited on. It is started
+ * before the tracks request and does not care how that one ends, because
+ * a board whose track list failed, or holds no tracks, can still hold
+ * maps, and those are two of the states somebody opens this tab in.
+ */
+async function loadMaps(getJson) {
+  try {
+    const payload = await getJson(here('api/maps'));
+    state.maps = Array.isArray(payload.maps) ? payload.maps : [];
+    state.mapsState = 'ready';
+  } catch (e) {
+    state.maps = [];
+    state.mapsState = 'failed';
+    state.mapsError = e.message || 'The maps could not be loaded.';
+  }
+  paintMapAuthors();
+  paintMapGrid();
+  paintMapRail();
+  paintStats();
+  /* A pasted #map= link arrived before the map it names did. */
+  if (/^#map=/.test(location.hash) && !sheetOpen()) {
+    route();
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Counts                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1080,10 +1443,18 @@ function paintStats() {
   const n = state.courses.length;
   const times = state.courses.reduce((sum, t) => sum + (t.times || 0), 0);
   const pilots = standings().length;
+  const maps = state.maps.length;
   const mast = byId('mast-stats');
   const spine = byId('spine-stats');
   if (mast) {
-    mast.hidden = !n;
+    mast.hidden = !n && !maps;
+  }
+  /* Maps only once there is one, the way Pilots only appears once somebody
+   * has flown: a zero in the masthead is a thing nobody needs told. */
+  const mapCell = byId('stat-maps');
+  if (mapCell) {
+    mapCell.textContent = String(maps);
+    mapCell.parentElement.hidden = maps === 0;
   }
   const courseCell = byId('stat-courses');
   const timeCell = byId('stat-times');
@@ -1099,11 +1470,12 @@ function paintStats() {
     pilotCell.parentElement.hidden = pilots === 0;
   }
   if (spine) {
-    spine.textContent = n
+    spine.textContent = n || maps
       ? joined([
-        plural(n, 'track', 'tracks'),
-        plural(times, 'time', 'times'),
+        n ? plural(n, 'track', 'tracks') : '',
+        n ? plural(times, 'time', 'times') : '',
         pilots ? plural(pilots, 'pilot', 'pilots') : '',
+        maps ? plural(maps, 'map', 'maps') : '',
       ])
       : '';
   }
@@ -1432,8 +1804,11 @@ function paintAdmin() {
   }
   paintAdminSponsors();
   const track = state.openId ? courseById(state.openId) : null;
+  const map = state.openMapId ? mapById(state.openMapId) : null;
   if (track) {
     paintSheetAdmin(track);
+  } else if (map) {
+    paintMapSheetAdmin(map);
   } else {
     const host = byId('sheet-admin');
     if (host) {
@@ -1508,8 +1883,28 @@ async function restoreAdmin() {
  *
  * It disarms itself after a few seconds, so a panel left open on a desk
  * does not have a loaded button in it.
+ *
+ * A map's sheet has the same control, pointed at the map's own address:
+ * one button, written once, so the two cannot drift on how careful they are.
  */
 function paintSheetAdmin(track) {
+  const held = track.times || 0;
+  paintRemoval(track.name, held
+    ? `Taking this off the board takes ${plural(held, 'posted time', 'posted times')} with it. There is no undo.`
+    : 'Taking this off the board cannot be undone. The id becomes free to publish again.',
+  `api/tracks/${encodeURIComponent(track.id)}/remove`, () => dropTrack(track.id));
+}
+
+/* A map has no times to lose. What goes with it is its sponsor print,
+ * unless another map on the board wears the same picture: the board keeps
+ * one copy of a picture however many maps wear it. */
+function paintMapSheetAdmin(map) {
+  paintRemoval(map.name,
+    'Taking this map off the board cannot be undone. The id becomes free to publish again.',
+    `api/maps/${encodeURIComponent(map.id)}/remove`, () => dropMap(map.id));
+}
+
+function paintRemoval(name, note, path, drop) {
   const host = byId('sheet-admin');
   if (!host) {
     return;
@@ -1520,10 +1915,7 @@ function paintSheetAdmin(track) {
     return;
   }
   host.append(el('div', 'kicker', 'Admin'));
-  const held = track.times || 0;
-  host.append(el('p', null, held
-    ? `Taking this off the board takes ${plural(held, 'posted time', 'posted times')} with it. There is no undo.`
-    : 'Taking this off the board cannot be undone. The id becomes free to publish again.'));
+  host.append(el('p', null, note));
 
   const btn = el('button', 'btn danger small', 'Take off the board');
   btn.type = 'button';
@@ -1537,7 +1929,7 @@ function paintSheetAdmin(track) {
   btn.addEventListener('click', async () => {
     if (!armed) {
       btn.classList.add('armed');
-      btn.textContent = `Remove ${track.name}, for good`;
+      btn.textContent = `Remove ${name}, for good`;
       armed = setTimeout(disarm, 6000);
       return;
     }
@@ -1546,8 +1938,8 @@ function paintSheetAdmin(track) {
     btn.disabled = true;
     btn.textContent = 'Removing';
     try {
-      await adminFetch(`api/tracks/${encodeURIComponent(track.id)}/remove`, { method: 'POST' });
-      dropTrack(track.id);
+      await adminFetch(path, { method: 'POST' });
+      drop();
     } catch (e) {
       btn.disabled = false;
       disarm();
@@ -1575,6 +1967,17 @@ function dropTrack(id) {
   /* clearHash routes back to the grid and returns focus to whatever opened
    * the sheet, which is the card that no longer exists; route() closing the
    * sheet is what matters and a missing focus target is handled there. */
+  clearHash();
+}
+
+/* The same for a map, and clearHash puts the reader back on the maps tab
+ * because that is where a map's sheet closes to. */
+function dropMap(id) {
+  state.maps = state.maps.filter((m) => m.id !== id);
+  paintStats();
+  paintMapAuthors();
+  paintMapGrid();
+  paintMapRail();
   clearHash();
 }
 
@@ -1677,19 +2080,31 @@ function factRow(list, label, value) {
 }
 
 function paintShot(host, track) {
+  shotInto(host, planCanvas(track.plan, planLabel(track), { scaleBar: true, pad: 26 }),
+    `${track.name}, a flight through the track`, orbitHref(state.config, track.id), 'Flying the track');
+}
+
+function paintMapShot(host, map) {
+  shotInto(host, planCanvas(map.plan, mapPlanLabel(map), { map: true, scaleBar: true, pad: 26 }),
+    `${map.name}, a flight around the map`, mapOrbitHref(state.config, map), 'Flying the map');
+}
+
+/* The drawing, and over it the simulator's own camera once its first
+ * frame is up. See watchOrbit for the hand over. */
+function shotInto(host, plan, title, src, waiting) {
   host.textContent = '';
-  host.append(planCanvas(track.plan, planLabel(track), { scaleBar: true, pad: 26 }));
+  host.append(plan);
   if (reduceMotion()) {
     return;
   }
   const frame = document.createElement('iframe');
   frame.className = 'orbit';
-  frame.title = `${track.name}, a flight through the track`;
+  frame.title = title;
   frame.tabIndex = -1;
   frame.setAttribute('aria-hidden', 'true');
-  frame.src = orbitHref(state.config, track.id);
+  frame.src = src;
   const wait = el('div', 'shot-wait');
-  wait.append(el('span', 'shot-dot'), el('span', null, 'Flying the track'));
+  wait.append(el('span', 'shot-dot'), el('span', null, waiting));
   host.append(wait, frame);
 }
 
@@ -1890,6 +2305,80 @@ async function paintSheet(track) {
   }
 }
 
+/*
+ * A MAP'S SHEET, in the track sheet's own dialog.
+ *
+ * The same drawing and the same camera over it, the same facts and the
+ * same actions, and where a track has its record and its times this has
+ * the named gaps, because they are what a map's builder made it for. It
+ * needs no request of its own: the summary already holds all of it.
+ */
+function paintMapSheet(map) {
+  byId('sheet-kicker').textContent = 'Freestyle map';
+  byId('sheet-title').textContent = map.name;
+  const by = byId('sheet-by');
+  by.textContent = '';
+  by.append('Built by ');
+  by.append(el('b', null, map.author));
+  const published = formatWhen(map.publishedUtc);
+  by.append(published ? `. Published ${published}.` : '.');
+
+  paintMapShot(byId('sheet-shot'), map);
+
+  const facts = byId('sheet-facts');
+  facts.textContent = '';
+  factRow(facts, 'Pieces', plural(map.pieces, 'piece', 'pieces'));
+  factRow(facts, 'Named gaps', map.gaps ? String(map.gaps) : 'None');
+  factRow(facts, 'Plot', fieldSize(map));
+  factRow(facts, 'Flown on', CRAFT_LABEL.full);
+  factRow(facts, 'Updated', formatAgo(map.updatedUtc));
+  if (map.hasLogo) {
+    factRow(facts, 'Branding', 'Sponsor print');
+  }
+
+  const actions = byId('sheet-actions');
+  actions.textContent = '';
+  const fly = el('a', 'btn primary', 'Fly this map');
+  fly.href = mapFlyHref(state.config, map.id);
+  fly.target = SIM_WINDOW;
+  const remix = el('a', 'text', 'Remix in the builder');
+  remix.href = mapRemixHref(state.config, map.id);
+  remix.target = SIM_WINDOW;
+  actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${mapHref(map.id)}`));
+
+  paintMapSheetAdmin(map);
+
+  const hero = byId('sheet-hero');
+  hero.textContent = '';
+  hero.hidden = true;
+  paintMapGaps(byId('sheet-board'), map);
+  paintPlans(byId('sheet'));
+}
+
+function paintMapGaps(host, map) {
+  host.textContent = '';
+  const names = gapNamesOf(map);
+  const head = el('div', 'board-head');
+  head.append(el('h3', null, names.length || map.gaps ? 'Named gaps' : 'No named gaps'));
+  host.append(head);
+  if (names.length) {
+    const list = el('ol', 'map-gaps');
+    names.forEach((name, i) => {
+      const li = el('li');
+      li.append(el('span', 'rk', String(i + 1)), el('span', null, name));
+      list.append(li);
+    });
+    host.append(list);
+  }
+  let note = 'A freestyle map has no clock and no times, and nobody named a gap on this one. The whole plot is yours.';
+  if (names.length) {
+    note = 'A freestyle map has no clock and no times. The named gaps are the lines its builder wants flown, and each one is marked on the drawing.';
+  } else if (map.gaps) {
+    note = `A freestyle map has no clock and no times. This one has ${plural(map.gaps, 'named gap', 'named gaps')}, the lines its builder wants flown.`;
+  }
+  host.append(el('p', 'map-note', note));
+}
+
 /* The page behind an open sheet is inert, so tabbing cannot walk out of
  * the dialog into a grid nobody can see. */
 function setPageInert(on) {
@@ -1920,6 +2409,7 @@ function closeSheets() {
     shot.textContent = '';
   }
   state.openId = null;
+  state.openMapId = null;
   document.body.classList.remove('locked');
   setPageInert(false);
 }
@@ -1941,7 +2431,10 @@ function openSheet(node) {
 
 function clearHash() {
   const back = state.lastFocus;
-  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  /* A map's sheet was opened over the maps tab, so closing it goes back
+   * there rather than to the tracks. */
+  const tab = location.hash.startsWith('#map=') ? '#maps' : '';
+  history.replaceState(null, '', `${location.pathname}${location.search}${tab}`);
   route();
   if (back && document.contains(back)) {
     back.focus();
@@ -1953,41 +2446,59 @@ function clearHash() {
 /* ------------------------------------------------------------------ */
 
 /*
- * WHICH TAB IS SHOWING, and it is decided by the address rather than by a
- * click, so a pasted #stats lands on the statistics and a reload stays put.
+ * WHICH SECTION IS SHOWING, and it is decided by the address rather than by
+ * a click, so a pasted #maps lands on the maps, a pasted #stats on the
+ * statistics, and a reload stays put. 'tracks', 'maps' or 'stats'.
  *
  * The aircraft switch belongs to the tracks tab alone: it chooses which
- * tracks are listed and means nothing beside a page of counters, so it is
- * hidden with the section it governs rather than standing above both.
+ * tracks are listed and means nothing beside the maps, which are all flown
+ * on the five inch, or beside a page of counters, so it is hidden with the
+ * section it governs rather than standing above all three.
  */
 let shownTab = '';
 
 function showTab(name) {
-  const stats = name === 'stats';
   const changed = Boolean(shownTab) && shownTab !== name;
   shownTab = name;
-  const tracks = byId('view-tracks');
-  const board = byId('view-stats');
+  const views = { tracks: byId('view-tracks'), maps: byId('view-maps'), stats: byId('view-stats') };
+  for (const [key, node] of Object.entries(views)) {
+    if (node) {
+      node.hidden = key !== name;
+    }
+  }
   const craft = byId('craftswitch');
-  if (tracks) {
-    tracks.hidden = stats;
-  }
-  if (board) {
-    board.hidden = !stats;
-  }
   if (craft) {
-    craft.hidden = stats;
+    craft.hidden = name !== 'tracks';
   }
-  for (const [id, on] of [['tab-tracks', !stats], ['tab-stats', stats]]) {
+  for (const [id, key] of [['tab-tracks', 'tracks'], ['tab-maps', 'maps']]) {
     const tab = byId(id);
     if (!tab) {
       continue;
     }
+    const on = key === name;
     tab.classList.toggle('is-on', on);
     tab.setAttribute('aria-selected', on ? 'true' : 'false');
     /* One tab stop for the row, which is how a tablist is meant to work:
-     * Tab reaches the chosen tab and the arrow keys move between them. */
-    tab.tabIndex = on ? 0 : -1;
+     * Tab reaches the chosen tab and the arrow keys move between them.
+     * With the statistics showing neither tab is chosen, and the stop
+     * stays on the first one so the keyboard can still get back in. */
+    tab.tabIndex = on || (name === 'stats' && key === 'tracks') ? 0 : -1;
+  }
+  /* The masthead link that took the old tab's place says so while its
+   * page is the one showing. */
+  const link = byId('stats-link');
+  if (link) {
+    link.classList.toggle('is-here', name === 'stats');
+    if (name === 'stats') {
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.removeAttribute('aria-current');
+    }
+  }
+  /* A grid painted while its section was hidden has canvases with no size,
+   * and plan.js leaves those for the next pass. This is the next pass. */
+  if (views[name]) {
+    paintPlans(views[name]);
   }
   /*
    * A reader who followed the footer's link is standing at the foot of the
@@ -2003,7 +2514,7 @@ function showTab(name) {
       row.scrollIntoView({ block: 'start', behavior: reduceMotion() ? 'auto' : 'smooth' });
     }
   }
-  showStats(stats);
+  showStats(name === 'stats');
 }
 
 function route() {
@@ -2011,6 +2522,33 @@ function route() {
   if (hash === '#stats') {
     closeSheets();
     showTab('stats');
+    return;
+  }
+  if (hash === '#maps') {
+    closeSheets();
+    showTab('maps');
+    return;
+  }
+  /* A map's sheet opens over the maps tab, so closing it lands where the
+   * reader was. The list may not have answered yet on a pasted link;
+   * loadMaps routes again when it does. */
+  const mapFound = hash.match(/^#map=(.+)$/);
+  if (mapFound) {
+    showTab('maps');
+    let id = '';
+    try {
+      id = decodeURIComponent(mapFound[1]);
+    } catch (e) {
+      id = mapFound[1];
+    }
+    const map = mapById(id);
+    if (!map) {
+      closeSheets();
+      return;
+    }
+    openSheet(byId('sheet'));
+    state.openMapId = id;
+    paintMapSheet(map);
     return;
   }
   showTab('tracks');
@@ -2171,6 +2709,41 @@ function bindToolbar() {
   }
 }
 
+/* The maps tab's toolbar. Bound once, at boot, because unlike the tracks
+ * toolbar it has to work on a board whose track list failed. */
+function bindMapToolbar() {
+  const find = byId('map-find');
+  const sort = byId('map-sort');
+  const by = byId('map-by');
+  if (find) {
+    find.addEventListener('input', () => {
+      state.mapQuery = find.value;
+      paintMapGrid();
+    });
+    find.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && find.value) {
+        e.stopPropagation();
+        find.value = '';
+        state.mapQuery = '';
+        paintMapGrid();
+      }
+    });
+  }
+  if (sort) {
+    sort.value = state.mapSort;
+    sort.addEventListener('change', () => {
+      state.mapSort = sort.value;
+      paintMapGrid();
+    });
+  }
+  if (by) {
+    by.addEventListener('change', () => {
+      state.mapAuthor = by.value;
+      paintMapGrid();
+    });
+  }
+}
+
 /*
  * The tag vocabulary, taken off the track list's own payload.
  *
@@ -2296,9 +2869,10 @@ function watchKeys() {
         return;
       }
       /* A tab address is not something Escape should undo: somebody
-       * reading the statistics has not opened anything to close, and
-       * clearing the hash would move them to the tracks under their eyes. */
-      if (location.hash && location.hash !== '#stats' && location.hash !== '#tracks') {
+       * reading the statistics or the maps has not opened anything to
+       * close, and clearing the hash would move them to the tracks under
+       * their eyes. */
+      if (location.hash && !['#stats', '#tracks', '#maps'].includes(location.hash)) {
         clearHash();
       }
       return;
@@ -2308,7 +2882,8 @@ function watchKeys() {
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || sheetOpen()) {
         return;
       }
-      const find = byId('find');
+      /* The search of whichever tab is showing. */
+      const find = byId(shownTab === 'maps' ? 'map-find' : 'find');
       if (find && !find.closest('[hidden]')) {
         e.preventDefault();
         find.focus();
@@ -2359,10 +2934,10 @@ async function start() {
   bindAdmin();
   restoreAdmin();
   /*
-   * THE STATISTICS TAB IS BOUND HERE FOR THE SAME REASON THE ADMIN BUTTON
-   * IS: it has to work on a board with nothing published and on a board
-   * whose list request just failed, and those are two of the states
-   * somebody opens it in. Both of the early returns below are past this.
+   * THE STATISTICS AND THE MAPS TAB ARE BOUND HERE FOR THE SAME REASON THE
+   * ADMIN BUTTON IS: they have to work on a board with no tracks and on a
+   * board whose track list just failed, and those are two of the states
+   * somebody opens them in. Both of the early returns below are past this.
    *
    * pingVisit is the board's own arrival, counted once per browser per day
    * across all three pages, and it captures a sponsor slug out of the query
@@ -2372,6 +2947,8 @@ async function start() {
    */
   mountStats(here('api/stats'));
   bindTabs();
+  bindMapToolbar();
+  paintMapGrid();
   pingVisit('board', here('api/stats/events'));
   /*
    * And routed now, not only at the end. The two returns below leave on an
@@ -2440,6 +3017,11 @@ async function start() {
      * already bound, and the tracks request below is about to say
      * something far more useful if the board is genuinely down. */
   }
+
+  /* After the config, because a map card's links need the simulator's
+   * address, and before the tracks, because nothing about the maps waits
+   * on them. Not awaited: see loadMaps. */
+  loadMaps(getJson);
 
   try {
     const payload = await getJson(here('api/tracks'));

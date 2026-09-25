@@ -1877,10 +1877,70 @@
       }
 
       /* ---------------------------------------------------------------
-         The statistics tab.
+         The statistics, which were the second tab and are opened from the
+         masthead now.
          --------------------------------------------------------------- */
       #view-stats[hidden] { display: none; }
       #view-tracks[hidden] { display: none; }
+      #view-maps[hidden] { display: none; }
+
+      /* The masthead's Site statistics link while the statistics are the
+       * page. The mint rule is the chosen tab's own mark, moved to the link
+       * that took the tab's place, so the one thing lit on the page is the
+       * thing you are looking at. */
+      a.text.is-here {
+        color: var(--cream);
+        box-shadow: inset 0 -2px 0 var(--mint);
+        padding-bottom: 3px;
+      }
+
+      /* ---------------------------------------------------------------
+         The freestyle maps tab. It wears the tracks tab's classes, so
+         what is here is only what a map has and a track does not: the
+         named gaps, in the amber the drawing gives them.
+         --------------------------------------------------------------- */
+      .gaps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .gaps:empty { display: none; }
+      .gaps span {
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: rgba(255, 212, 92, 0.08);
+        box-shadow: inset 0 0 0 1px rgba(255, 212, 92, 0.26);
+        color: var(--amber);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .map-gaps {
+        margin: 10px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .map-gaps li {
+        display: grid;
+        grid-template-columns: 2.4em minmax(0, 1fr);
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        color: var(--cream);
+        font-size: 14px;
+      }
+      .map-gaps .rk {
+        font-family: var(--mono);
+        font-weight: 700;
+        color: var(--amber);
+      }
+      .map-note {
+        margin: 14px 0 0;
+        color: var(--slate);
+        font-size: 13px;
+        line-height: 1.6;
+      }
 
       .stats-head {
         display: flex;
@@ -2273,8 +2333,8 @@
         <h1><a class="home" id="brand-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a></h1>
         <div class="eyebrow">Tracks and statistics</div>
         <p class="invite">
-          Every published track, and the times flown on it. Open one, fly it in
-          the browser, and post a lap under your name.
+          Every published track and the times flown on it, and every freestyle
+          map. Open one, fly it in the browser, and post a lap under your name.
         </p>
       </div>
       <div class="mast-side">
@@ -2282,6 +2342,7 @@
           <div><dt>Tracks</dt><dd id="stat-courses">0</dd></div>
           <div><dt>Times</dt><dd id="stat-times">0</dd></div>
           <div><dt>Pilots</dt><dd id="stat-pilots">0</dd></div>
+          <div hidden><dt>Maps</dt><dd id="stat-maps">0</dd></div>
         </dl>
         <!-- target="webfpv-sim" on every link that crosses to the
              simulator: one simulator tab, reused, rather than one per
@@ -2299,6 +2360,18 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
             <span>Patreon</span>
           </a>
+          <!--
+            SITE STATISTICS, BESIDE ADMIN, AND IT USED TO BE A TAB.
+
+            The owner moved it here on 2026-09-25 so the second tab could
+            hold the freestyle maps. It is a page about the site rather than
+            a thing to fly, which is the company Admin already keeps, and it
+            is still an address: #stats, routed by app.js like every other
+            hash on this page, so the links already out there still land.
+            app.js lights it while the statistics are showing, because with
+            neither tab lit it is the only thing that says where you are.
+          -->
+          <a class="text" id="stats-link" href="#stats">Site statistics</a>
           <!--
             ADMIN, AND IT IS THE QUIETEST THING IN THE MASTHEAD ON PURPOSE.
 
@@ -2367,30 +2440,35 @@
     <main id="tracks">
       <!--
         TWO TABS, AND EACH ONE IS AN ADDRESS.
-        This page holds two things now, and they are not filters of each
-        other: the tracks with their times, and a page of counters about the
-        site. A tab is a real anchor carrying a real hash, so both are
-        linkable, both survive a reload, and the back button walks between
-        them. #tracks is the address of this element and was already the
-        skip link's target, so the first tab costs no new vocabulary.
-        role="tablist" over anchors: a screen reader is told these are tabs
-        and which is chosen, and a pointer is still handed a link it can
-        open, copy or bookmark. route() in app.js is what actually swaps
-        them, driven by hashchange, so a pasted #stats works with no click.
-        Bound before the two early returns in start(), because the statistics
-        tab has to open on a board with no tracks and on a board whose list
-        request failed, which are exactly the two states somebody opens it in.
+        This page holds two things to fly, and they are not filters of each
+        other: the race tracks with their times, and the freestyle maps,
+        which have no times because there is nothing to time. A tab is a
+        real anchor carrying a real hash, so both are linkable, both survive
+        a reload, and the back button walks between them. #tracks is the
+        address of this element and was already the skip link's target, so
+        the first tab costs no new vocabulary. role="tablist" over anchors:
+        a screen reader is told these are tabs and which is chosen, and a
+        pointer is still handed a link it can open, copy or bookmark.
+        route() in app.js is what actually swaps them, driven by hashchange,
+        so a pasted #maps works with no click.
+
+        The second tab was the site statistics until 2026-09-25. They moved
+        to the masthead, beside Admin, and #stats still opens them here in
+        place of both tabs' sections, with neither tab lit.
+        Bound before the two early returns in start(), because the maps tab
+        and the statistics have to open on a board with no tracks and on a
+        board whose track list failed, and the maps do not depend on it.
       -->
       <nav class="tabs" id="tabs" role="tablist" aria-label="What this page shows">
         <a class="tab is-on" id="tab-tracks" role="tab" href="#tracks"
            aria-selected="true" aria-controls="view-tracks">
           <span class="tab-name">Tracks and times</span>
-          <span class="tab-note">Every published track, and the times flown on it</span>
+          <span class="tab-note">Every published race track, and the times flown on it</span>
         </a>
-        <a class="tab" id="tab-stats" role="tab" href="#stats"
-           aria-selected="false" aria-controls="view-stats" tabindex="-1">
-          <span class="tab-name">Site statistics</span>
-          <span class="tab-note">Who is flying, where from, and on what</span>
+        <a class="tab" id="tab-maps" role="tab" href="#maps"
+           aria-selected="false" aria-controls="view-maps" tabindex="-1">
+          <span class="tab-name">Freestyle maps</span>
+          <span class="tab-note">Every published map, built to fly freely: no gates, no clock</span>
         </a>
       </nav>
       <nav class="switch switch-craft" id="craftswitch" aria-label="Which aircraft">
@@ -2449,7 +2527,53 @@
         </div>
       </section>
       <!--
-        THE STATISTICS TAB.
+        THE FREESTYLE MAPS TAB, BUILT THE WAY THE TRACKS TAB IS.
+
+        The same deck, toolbar, grid and rail, with its own ids so the two
+        tabs keep their own search and order: somebody who searched the
+        tracks for a pilot and then looks at the maps has not searched the
+        maps. There is no aircraft switch over it, because every map is flown
+        on the five inch, and no tag bar, because the tag vocabulary is a
+        race track's and a map has none. Everything inside is painted by
+        app.js from /api/maps, one request that holds every card's drawing.
+      -->
+      <section id="view-maps" aria-label="Published freestyle maps" hidden>
+        <div class="deck" id="map-deck">
+          <div class="deck-main">
+            <div class="toolbar" id="map-toolbar" hidden>
+              <div class="find">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.5" />
+                  <path d="M10.6 10.6 L14.5 14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                </svg>
+                <input id="map-find" type="search" placeholder="Find a map, a builder or a gap" aria-label="Find a map, a builder or a named gap" autocomplete="off" />
+                <kbd>/</kbd>
+              </div>
+              <div class="sort">
+                <label for="map-by">Built by</label>
+                <select id="map-by"><option value="">Anyone</option></select>
+              </div>
+              <div class="sort">
+                <label for="map-sort">Order</label>
+                <select id="map-sort">
+                  <option value="newest">Newest</option>
+                  <option value="biggest">Most pieces</option>
+                  <option value="gaps">Most named gaps</option>
+                  <option value="name">Name</option>
+                </select>
+              </div>
+              <span class="count" id="map-count"></span>
+            </div>
+            <div id="map-list" class="grid"></div>
+            <div id="map-notice"></div>
+          </div>
+          <aside class="rail" id="map-rail" hidden aria-label="Builders"></aside>
+        </div>
+      </section>
+      <!--
+        THE STATISTICS, opened from the masthead's Site statistics link and
+        from the footer's, at #stats. It was the second tab until the maps
+        took that place; it still stands where the tabs' sections stand.
         Almost all of it is painted by public/stats.js from one request, so
         what is written here is the furniture that must exist without
         JavaScript and the prose that must be readable whether the numbers
@@ -2506,9 +2630,10 @@
 
     <footer>
       <p>
-        WebFPV Tracks and Statistics. Every published track and every named
-        time lives here. The simulator itself keeps nothing: a track you build stays
-        in your browser until you publish it. Free software under GPLv3.
+        WebFPV Tracks and Statistics. Every published track, every named
+        time and every published freestyle map lives here. The simulator itself
+        keeps nothing: a track or a map you build stays in your browser until
+        you publish it. Free software under GPLv3.
       </p>
       <nav>
         <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
