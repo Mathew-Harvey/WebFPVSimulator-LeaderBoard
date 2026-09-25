@@ -2330,7 +2330,7 @@
           is a way back, and a way back that leaves the page you are
           leaving open behind it is not one.
         -->
-        <h1><a class="home" id="brand-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a></h1>
+        <h1><a class="home" id="brand-home" href="https://webfpv.org/" title="Back to the front page">WEB<span class="fpv">FPV</span></a></h1>
         <div class="eyebrow">Tracks and statistics</div>
         <p class="invite">
           Every published track and the times flown on it, and every freestyle
@@ -2353,9 +2353,9 @@
              each click to a fresh tab. See src/share/windows.js in the
              simulator. -->
         <nav class="links">
-          <a class="btn" id="builder-link" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
-          <a class="text" id="sim-link" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
-          <a class="text" id="mast-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+          <a class="btn" id="builder-link" target="webfpv-sim" href="https://webfpv.org/sim/src/trackbuilder/index.html">Build a track</a>
+          <a class="text" id="sim-link" target="webfpv-sim" href="https://webfpv.org/sim/">Open the simulator</a>
+          <a class="text" id="mast-credits" href="https://webfpv.org/sim/#credits" target="webfpv-sim">Credits</a>
           <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
             <span>Patreon</span>
@@ -2394,12 +2394,12 @@
     <div class="spine">
       <div class="chequer" aria-hidden="true"></div>
       <div class="spine-inner">
-        <a class="spine-mark" id="spine-home" href="http://127.0.0.1:8080/" title="Back to the front page">WEB<span class="fpv">FPV</span></a>
+        <a class="spine-mark" id="spine-home" href="https://webfpv.org/" title="Back to the front page">WEB<span class="fpv">FPV</span></a>
         <span class="spine-stats" id="spine-stats"></span>
         <nav class="links">
-          <a class="text" id="spine-build" target="webfpv-sim" href="http://127.0.0.1:8000/src/trackbuilder/index.html">Build a track</a>
+          <a class="text" id="spine-build" target="webfpv-sim" href="https://webfpv.org/sim/src/trackbuilder/index.html">Build a track</a>
           <a class="text" href="#stats">Statistics</a>
-          <a class="text" id="spine-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+          <a class="text" id="spine-credits" href="https://webfpv.org/sim/#credits" target="webfpv-sim">Credits</a>
           <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
             <span>Patreon</span>
@@ -2619,7 +2619,13 @@
             new or returning from a date it keeps to itself, and sends just
             the yes or no. If you came in through a sponsor's link, your
             browser remembers that sponsor's name for 30 days, so the board
-            knows which sponsor sent a visit but not who you are.
+            knows which sponsor sent a visit but not who you are. The board
+            also keeps the name of the site you came from, like reddit.com
+            or news.ycombinator.com, but never the full address of the page.
+            If the link had a short ref tag, it keeps that as well. Only
+            tags on a fixed list are kept, and anything else is counted as
+            &quot;other&quot;, so nobody can fill the board with made-up
+            tags.
           </p>
           <div class="stats-optout" id="stats-optout"></div>
         </div>
@@ -2636,10 +2642,10 @@
         you publish it. Free software under GPLv3.
       </p>
       <nav>
-        <a id="foot-sim" target="webfpv-sim" href="http://127.0.0.1:8000/">Open the simulator</a>
+        <a id="foot-sim" target="webfpv-sim" href="https://webfpv.org/sim/">Open the simulator</a>
         <a href="#stats">Site statistics</a>
         <a href="bugs.html">Bugs and feedback</a>
-        <a id="foot-credits" href="http://127.0.0.1:8000/#credits" target="webfpv-sim">Credits</a>
+        <a id="foot-credits" href="https://webfpv.org/sim/#credits" target="webfpv-sim">Credits</a>
         <a class="patreon" data-patreon href="https://www.patreon.com/c/webfpv" target="_blank" rel="noopener noreferrer" aria-label="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join." title="Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#FF424D" d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524M.003 23.537h4.22V.524H.003"/></svg>
           <span>Patreon</span>

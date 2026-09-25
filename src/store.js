@@ -427,6 +427,8 @@ export function shapeStats({
     allTime: { ...allTime, countries: countriesAllTime },
     countries,
     sources: of('source'),
+    referrers: of('referrer'),
+    refs: of('ref'),
     craft: of('craft'),
     maps: of('map'),
     inputs: of('input'),
@@ -1080,6 +1082,12 @@ class FileStore {
       bump('surface', event.surface, 'visits', 1);
       bump('country', country, 'visits', 1);
       bump('source', event.source, 'visits', 1);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 'visits', 1);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 'visits', 1);
+      }
     } else if (event.kind === 'session') {
       row.sessions += 1;
       bump('craft', event.craft, 'sessions', 1);
@@ -1087,6 +1095,12 @@ class FileStore {
       bump('input', event.input, 'sessions', 1);
       bump('country', country, 'sessions', 1);
       bump('source', event.source, 'sessions', 1);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 'sessions', 1);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 'sessions', 1);
+      }
     } else {
       row.laps += event.laps;
       row.flightS += event.flightS;
@@ -1100,6 +1114,12 @@ class FileStore {
         bump('map', event.map, 'laps', event.laps);
         bump('country', country, 'laps', event.laps);
         bump('source', event.source, 'laps', event.laps);
+        if (event.referrer) {
+          bump('referrer', event.referrer, 'laps', event.laps);
+        }
+        if (event.ref) {
+          bump('ref', event.ref, 'laps', event.laps);
+        }
       }
     }
     await this.flush();
@@ -1941,6 +1961,12 @@ class PgStore {
       bump('surface', event.surface, 1, 0, 0);
       bump('country', country, 1, 0, 0);
       bump('source', event.source, 1, 0, 0);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 1, 0, 0);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 1, 0, 0);
+      }
     } else if (event.kind === 'session') {
       sessions = 1;
       bump('craft', event.craft, 0, 1, 0);
@@ -1948,6 +1974,12 @@ class PgStore {
       bump('input', event.input, 0, 1, 0);
       bump('country', country, 0, 1, 0);
       bump('source', event.source, 0, 1, 0);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 0, 1, 0);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 0, 1, 0);
+      }
     } else {
       laps = event.laps;
       flightS = event.flightS;
@@ -1958,6 +1990,12 @@ class PgStore {
         bump('map', event.map, 0, 0, event.laps);
         bump('country', country, 0, 0, event.laps);
         bump('source', event.source, 0, 0, event.laps);
+        if (event.referrer) {
+          bump('referrer', event.referrer, 0, 0, event.laps);
+        }
+        if (event.ref) {
+          bump('ref', event.ref, 0, 0, event.laps);
+        }
       }
     }
 

@@ -568,9 +568,13 @@ async function handleApi(req, res, url) {
    * read for the flood gate below and goes out of scope with the request.
    * It does not store the tab handle a flush carries, which lives in memory
    * for three minutes and answers one number. It does not store a
-   * timestamp finer than the day, a user agent, a referrer, a screen size,
-   * a pilot name or a track id, and there is no field in the wire format
-   * for any of them.
+   * timestamp finer than the day, a user agent, a screen size, a pilot
+   * name or a track id, and there is no field in the wire format for any
+   * of them.
+   *
+   * It DOES store a referrer domain (hostname only, not the full URL) and
+   * a ref tag, both folded to a closed list on the server, so a stranger
+   * with curl cannot grow the table.
    *
    * 204 for everything it accepts, and 204 for a request that asked not to
    * be counted, because the sender has nothing to do with either answer.
