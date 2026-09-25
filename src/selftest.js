@@ -2105,8 +2105,14 @@ async function testStats() {
   check('a session is accepted', !ok({
     v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad',
   }).error);
+  check('a session with referrer and ref is accepted', !ok({
+    v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad', referrer: 'reddit.com', ref: 'hn',
+  }).error);
   check('a flush is accepted', !ok({
     v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44,
+  }).error);
+  check('a flush with referrer and ref is accepted', !ok({
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44, referrer: 'reddit.com', ref: 'hn',
   }).error);
 
   check('a version this board does not read is refused', Boolean(ok({ v: 2, kind: 'visit' }).error));
@@ -2166,10 +2172,10 @@ async function testStats() {
   check('nothing but the counted fields comes out of a visit',
     Object.keys(smuggled).sort().join(',') === 'kind,ref,referrer,returning,source,surface');
   const flushed = ok({
-    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 1, name: 'Ada Rook',
+    v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 1, name: 'Ada Rook', referrer: 'reddit.com', ref: 'hn',
   }).event;
   check('nothing but the counted fields comes out of a flush',
-    Object.keys(flushed).sort().join(',') === 'craft,crashes,flightS,kind,laps,map,source,tab');
+    Object.keys(flushed).sort().join(',') === 'craft,crashes,flightS,kind,laps,map,ref,referrer,source,tab');
 
   /* The sponsor fold. This process has no BOARD_SPONSORS set, so every
    * named source is unknown to it, which is the case that matters: the

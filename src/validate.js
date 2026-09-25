@@ -1499,6 +1499,16 @@ export function inspectStatsEvent(body, sourceKey) {
   }
   const fold = typeof sourceKey === 'function' ? sourceKey : (x) => (x == null ? 'direct' : STATS_OTHER);
   const source = fold(body.source);
+  /* Referrer and ref are OPTIONAL on all event types, not just visits.
+   * They are captured at visit time and stored in sessionStorage, then ride
+   * on every event in that session (including flushes with laps), so laps
+   * can be attributed to the source that brought the visitor in. */
+  const referrer = body.referrer != null
+    ? String(body.referrer).trim().toLowerCase().slice(0, 100) || null
+    : null;
+  const ref = body.ref != null
+    ? String(body.ref).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16) || null
+    : null;
   if (kind === 'visit') {
     const surface = String(body.surface ?? '');
     if (!STATS_SURFACES.includes(surface)) {
@@ -1509,14 +1519,6 @@ export function inspectStatsEvent(body, sourceKey) {
     if (typeof body.returning !== 'boolean') {
       return { error: 'A visit says whether this browser has been here before.' };
     }
-    /* Referrer domain: optional, domain only (no protocol or path), capped. */
-    const referrer = body.referrer != null
-      ? String(body.referrer).trim().toLowerCase().slice(0, 100) || null
-      : null;
-    /* Ref tag: optional, short slug from ?ref= parameter, normalised. */
-    const ref = body.ref != null
-      ? String(body.ref).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16) || null
-      : null;
     return {
       event: {
         kind,
@@ -1540,6 +1542,8 @@ export function inspectStatsEvent(body, sourceKey) {
         map: foldedTo(body.map, STATS_MAPS),
         input: foldedTo(body.input, STATS_INPUTS),
         source,
+        referrer,
+        ref,
       },
     };
   }
@@ -1568,6 +1572,8 @@ export function inspectStatsEvent(body, sourceKey) {
       flightS,
       crashes,
       source,
+      referrer,
+      ref,
     },
   };
 }

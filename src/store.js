@@ -1005,6 +1005,12 @@ class FileStore {
       bump('input', event.input, 'sessions', 1);
       bump('country', country, 'sessions', 1);
       bump('source', event.source, 'sessions', 1);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 'sessions', 1);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 'sessions', 1);
+      }
     } else {
       row.laps += event.laps;
       row.flightS += event.flightS;
@@ -1018,6 +1024,12 @@ class FileStore {
         bump('map', event.map, 'laps', event.laps);
         bump('country', country, 'laps', event.laps);
         bump('source', event.source, 'laps', event.laps);
+        if (event.referrer) {
+          bump('referrer', event.referrer, 'laps', event.laps);
+        }
+        if (event.ref) {
+          bump('ref', event.ref, 'laps', event.laps);
+        }
       }
     }
     await this.flush();
@@ -1818,6 +1830,12 @@ class PgStore {
       bump('input', event.input, 0, 1, 0);
       bump('country', country, 0, 1, 0);
       bump('source', event.source, 0, 1, 0);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 0, 1, 0);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 0, 1, 0);
+      }
     } else {
       laps = event.laps;
       flightS = event.flightS;
@@ -1828,6 +1846,12 @@ class PgStore {
         bump('map', event.map, 0, 0, event.laps);
         bump('country', country, 0, 0, event.laps);
         bump('source', event.source, 0, 0, event.laps);
+        if (event.referrer) {
+          bump('referrer', event.referrer, 0, 0, event.laps);
+        }
+        if (event.ref) {
+          bump('ref', event.ref, 0, 0, event.laps);
+        }
       }
     }
 

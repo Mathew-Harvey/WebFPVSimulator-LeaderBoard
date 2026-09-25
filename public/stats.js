@@ -199,12 +199,42 @@ export function heldSource() {
  * EXTRACT THE REFERRER DOMAIN, stripping the protocol and path.
  *
  * Referrer is captured at visit time only, never stored, and only the domain
- * is sent. A full URL would be personal data; a domain is attribution. Same
- * origin referrers are folded to null: somebody navigating within webfpv.org
- * is not an external referrer.
+ * is sent. A full URL would be personal data; a domain is attribution.
+ *
+ * PREFERS AN EXPLICIT ?referrer= PARAMETER over document.referrer. This is
+ * the carry-through from the landing page: when a visitor arrives from an
+ * external site to webfpv.org, the landing page captures the original
+ * referrer and appends it as ?referrer=<domain> when linking to /board/ or
+ * /sim/. Without this, document.referrer would be webfpv.org (same-origin)
+ * and the original source would be lost.
+ *
+ * Same-origin referrers are folded to null: somebody navigating within
+ * webfpv.org is not an external referrer.
  */
 export function referrerDomain(doc = document, loc = window.location) {
   try {
+    /* First, check for an explicit ?referrer= parameter from the landing page. */
+    const url = new URL(loc.href);
+    const explicit = url.searchParams.get('referrer');
+    if (explicit) {
+      /* Sanitise to domain only: strip protocol, path, and anything that isn't a hostname. */
+      const clean = String(explicit).trim().toLowerCase();
+      if (clean) {
+        /* Accept it if it looks like a domain. The landing page should send
+         * domain only, but a belt to that braces: try parsing it as a URL
+         * in case it's a full URL, and fall back to the string itself. */
+        try {
+          const parsed = new URL(clean.startsWith('http') ? clean : `https://${clean}`);
+          return parsed.hostname;
+        } catch (e) {
+          /* Not a parseable URL. Accept it as-is if it looks like a domain. */
+          if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(clean)) {
+            return clean;
+          }
+        }
+      }
+    }
+    /* Fall back to document.referrer. */
     const ref = String(doc.referrer || '').trim();
     if (!ref) {
       return null;
@@ -301,16 +331,72 @@ export function markVisit() {
 }
 
 /*
+ * STORE REFERRER AND REF FOR THIS SESSION.
+ *
+ * These are stored in sessionStorage (not localStorage) so they persist for
+ * the current session only, not for 30 days like the sponsor source does.
+ * This lets laps be attributed to the referrer/ref that brought the visitor
+ * in, without making those values a standing label the way a sponsor slug is.
+ *
+ * A session here is browser-session: closing the tab ends it, reloading
+ * preserves it. This matches the tab handle's lifetime.
+ */
+const SESSION_ATTR_KEY = 'webfpv.session.attribution';
+
+function storeSessionAttribution(referrer, ref) {
+  try {
+    const attr = {};
+    if (referrer) {
+      attr.referrer = referrer;
+    }
+    if (ref) {
+      attr.ref = ref;
+    }
+    if (Object.keys(attr).length > 0) {
+      sessionStorage.setItem(SESSION_ATTR_KEY, JSON.stringify(attr));
+    }
+  } catch (e) {
+    /* Private mode or storage full. Non-fatal: attribution just won't
+     * persist to later events. */
+  }
+}
+
+export function sessionAttribution() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_ATTR_KEY);
+    if (!raw) {
+      return {};
+    }
+    const attr = JSON.parse(raw);
+    return attr && typeof attr === 'object' && !Array.isArray(attr) ? attr : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+/*
  * Post one event. A beacon, so it survives the page being closed, which is
  * exactly when the last flush is sent. text/plain because a beacon cannot
  * set a header and a simple request needs no preflight; the board never
  * reads the content type.
+ *
+ * Session attribution (referrer and ref) is added to ALL events, not just
+ * visits, so that laps can be attributed to the source that brought the
+ * visitor in. The values are stored in sessionStorage when a visit happens
+ * and ride on every event in that session.
  */
 export function sendEvent(payload, url) {
   if (!counting()) {
     return false;
   }
-  const body = JSON.stringify({ v: 1, ...payload, source: heldSource() });
+  const attr = sessionAttribution();
+  const body = JSON.stringify({
+    v: 1,
+    ...payload,
+    source: heldSource(),
+    referrer: attr.referrer || payload.referrer || null,
+    ref: attr.ref || payload.ref || null,
+  });
   try {
     if (navigator.sendBeacon) {
       return navigator.sendBeacon(url, new Blob([body], { type: 'text/plain;charset=UTF-8' }));
@@ -343,6 +429,8 @@ export function pingVisit(surface, url) {
   }
   const referrer = referrerDomain();
   const ref = captureRefTag();
+  /* Store in sessionStorage so flush events can include them. */
+  storeSessionAttribution(referrer, ref);
   return sendEvent({
     kind: 'visit',
     surface,
