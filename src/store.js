@@ -169,6 +169,24 @@ const MAP_CONFLICT = {
 };
 
 /*
+ * THE TAGS A PUBLISH LEAVES ON A TRACK, one rule for both stores, because
+ * the two getting it differently is a track that keeps its tags on one
+ * backend and loses them on the other.
+ *
+ * `sent` is what inspectTags made of the request. A list, empty included,
+ * is the author saying what the track wears now, so it replaces. Null is a
+ * request that carried no list, a rename or a new handle, so the track
+ * keeps what it wore. A new track, and a track from before tags, has
+ * nothing to keep and wears none.
+ */
+function tagsAfter(sent, held) {
+  if (Array.isArray(sent)) {
+    return sent;
+  }
+  return Array.isArray(held) ? held : [];
+}
+
+/*
  * A published map as the API lists it. The document is never in a list: a
  * map's card needs its outline drawing and its counts, and the document,
  * logos and all, is fetched by the one reader that flies it. Its Postgres
@@ -499,8 +517,9 @@ class FileStore {
     return this.lock(() => this.publishUnlocked({ inspected, author, editKey, tags }));
   }
 
-  async publishUnlocked({ inspected, author, editKey, tags = [] }) {
+  async publishUnlocked({ inspected, author, editKey, tags = null }) {
     const existing = this.data.tracks[inspected.id];
+    const wearing = tagsAfter(tags, existing && existing.tags);
     let key = editKey;
     let timesCleared = false;
     if (existing) {
@@ -542,7 +561,7 @@ class FileStore {
       hasLogo: inspected.hasLogo,
       gates: inspected.gates,
       elements: inspected.elements,
-      tags,
+      tags: wearing,
       gif: keepGif ? (existing.gif || null) : null,
       gifUtc: keepGif ? (existing.gifUtc || null) : null,
       publishedUtc,
@@ -559,6 +578,10 @@ class FileStore {
       editKey: existing ? undefined : key,
       updated: Boolean(existing),
       timesCleared,
+      /* What the track wears now, so a browser that sent no list learns
+       * what it kept. The simulator remembers this to pre-tick its next
+       * publish, since tags are nowhere in the document it holds. */
+      tags: wearing,
     };
   }
 
@@ -1156,11 +1179,15 @@ class PgStore {
     return found.rows[0];
   }
 
-  async publish({ inspected, author, editKey, tags = [] }) {
+  async publish({ inspected, author, editKey, tags = null }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const existing = await client.query('SELECT * FROM tracks WHERE id = $1 FOR UPDATE', [inspected.id]);
+      /* Worked out here from the locked row rather than with a COALESCE in
+       * the UPDATE, so both stores read as the same one line. The row is
+       * held FOR UPDATE until COMMIT, so nothing can retag it in between. */
+      const wearing = tagsAfter(tags, existing.rowCount ? existing.rows[0].tags : null);
       let key = editKey;
       let timesCleared = false;
       if (existing.rowCount) {
@@ -1194,7 +1221,7 @@ class PgStore {
           [
             inspected.id, inspected.name, author, inspected.document, inspected.plan,
             inspected.layoutHash, inspected.hasLogo, inspected.gates, inspected.elements,
-            tags,
+            wearing,
           ],
         );
       } else {
@@ -1207,7 +1234,7 @@ class PgStore {
           [
             inspected.id, inspected.name, author, inspected.document, inspected.plan,
             inspected.layoutHash, hashEditKey(key), inspected.hasLogo, inspected.gates,
-            inspected.elements, tags,
+            inspected.elements, wearing,
           ],
         );
       }
@@ -1219,6 +1246,8 @@ class PgStore {
         editKey: existing.rowCount ? undefined : key,
         updated: Boolean(existing.rowCount),
         timesCleared,
+        /* The file store's publishUnlocked answers the same, and says why. */
+        tags: wearing,
       };
     } catch (e) {
       try {

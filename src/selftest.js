@@ -22,7 +22,7 @@ import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
   creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
   inspectStatsEvent, normaliseCountry, statsDay,
-  expandAssets, inspectMap, inspectMapPlan,
+  expandAssets, inspectMap, inspectMapPlan, inspectTags,
 } from './validate.js';
 import { sourceKey } from './sponsors.js';
 import {
@@ -533,6 +533,21 @@ async function testValidate() {
   check('refuses a ghost that does not match the lap beside it', Boolean(inspectGhost(ghostB64, 35000).error));
   check('refuses a ghost past the size cap', Boolean(inspectGhost('A'.repeat(500_004), 1000).error));
   check('refuses a ghost claiming an hour of lap', Boolean(inspectGhost(makeGhostB64(3_000_000, { rateHz: 1 }), 3_000_000).error));
+
+  /*
+   * NO TAG LIST IS NOT AN EMPTY ONE. A request that leaves `tags` out is a
+   * republish that was not about tags, a rename or a new handle, and it
+   * must reach the store as "keep them", which is null. An empty list is
+   * the author taking every tag off. Both came out as [] until 25 September,
+   * so every rename untagged the track it renamed.
+   */
+  check('a request with no tag list asks for nothing to change',
+    inspectTags(undefined).tags === null && !inspectTags(undefined).error);
+  check('and JSON null reads as no list, not as none',
+    inspectTags(null).tags === null && !inspectTags(null).error);
+  const noTags = inspectTags([]);
+  check('an empty tag list is a list, and it clears',
+    Array.isArray(noTags.tags) && noTags.tags.length === 0 && !noTags.error);
 }
 
 async function testStore() {
@@ -650,6 +665,47 @@ async function testStore() {
   check('a fixed ticket leaves the open list', stillOpen.length === 0);
   const missing = await store.updateBug('bug-00000000', { status: 'open' });
   check('updating a missing ticket is a 404', missing.status === 404);
+
+  /*
+   * THE TAGS A REPUBLISH LEAVES, through the store rather than the route,
+   * because the rule is the store's and the route only hands it null. A
+   * track the builder renames, or republishes under its author's new
+   * handle, sends no list, and it has to come out wearing what it wore.
+   * Only an explicit empty list takes them off. See tagsAfter in store.js.
+   */
+  const tagDoc = (name) => inspectDocument(sampleDoc('trk-5e5e5e5e', name ? { name } : {}));
+  const tagsOn = async (id) => ((await store.getTrack(id)) || {}).tags || [];
+  const tagFirst = await store.publish({
+    inspected: tagDoc(), author: 'Ada Rook', editKey: '', tags: ['race', 'skills'],
+  });
+  check('a first publish answers with the tags it wears',
+    Array.isArray(tagFirst.tags) && tagFirst.tags.join() === 'race,skills', String(tagFirst.tags));
+  const tagRenamed = await store.publish({
+    inspected: tagDoc('Tag Loop'), author: 'Ada Rook', editKey: tagFirst.editKey, tags: null,
+  });
+  /* String() rather than .join(), so an answer with no list fails the check
+   * instead of throwing and taking the rest of the suite with it. */
+  check('a rename with no tag list keeps the tags',
+    String(tagRenamed.tags) === 'race,skills' && String(await tagsOn('trk-5e5e5e5e')) === 'race,skills',
+    `answer ${tagRenamed.tags}, stored ${await tagsOn('trk-5e5e5e5e')}`);
+  const tagHandle = await store.publish({
+    inspected: tagDoc('Tag Loop'), author: 'Ada Two', editKey: tagFirst.editKey,
+  });
+  check('and so does a new handle, with the list left out altogether',
+    String(tagHandle.tags) === 'race,skills' && String(await tagsOn('trk-5e5e5e5e')) === 'race,skills',
+    `answer ${tagHandle.tags}, stored ${await tagsOn('trk-5e5e5e5e')}`);
+  const tagCleared = await store.publish({
+    inspected: tagDoc('Tag Loop'), author: 'Ada Two', editKey: tagFirst.editKey, tags: [],
+  });
+  check('an empty list takes them all off',
+    Array.isArray(tagCleared.tags) && tagCleared.tags.length === 0
+    && (await tagsOn('trk-5e5e5e5e')).length === 0,
+    `answer ${tagCleared.tags}, stored ${await tagsOn('trk-5e5e5e5e')}`);
+  const tagFresh = await store.publish({
+    inspected: inspectDocument(sampleDoc('trk-6f6f6f6f')), author: 'Ada Rook', editKey: '',
+  });
+  check('a first publish with no list wears none',
+    Array.isArray(tagFresh.tags) && tagFresh.tags.length === 0 && (await tagsOn('trk-6f6f6f6f')).length === 0);
   await rm(dir, { recursive: true, force: true });
 
   const legacyDir = await mkdtemp(join(tmpdir(), 'webfpv-board-legacy-'));
@@ -1217,6 +1273,45 @@ async function testHttp() {
     check('retagging a track keeps its times',
       retagged.status === 200 && retaggedBody.timesCleared === false
       && afterRetag.times.length === 1 && afterRetag.tags.join() === 'skills');
+    /*
+     * LEFT OUT IS NOT EMPTY, and these are the two republishes that took
+     * tracks' tags off until 25 September. The builder putting up a rename
+     * sends no list, and so does the simulator when a pilot changes the name
+     * they fly under: the same document, once under a new title and once
+     * under a new author, and both have to leave the tags where they are.
+     */
+    const repost = (over) => fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: 'Ada Rook',
+        document: sampleDoc('trk-7a7a7a7a'),
+        editKey: taggedBody.editKey,
+        ...over,
+      }),
+    });
+    const trackNow = () => fetch('http://127.0.0.1:3199/api/tracks/trk-7a7a7a7a').then((r) => r.json());
+    const renamedNoTags = await repost({ document: sampleDoc('trk-7a7a7a7a', { name: 'Tagged Loop' }) });
+    const renamedNoTagsBody = await renamedNoTags.json();
+    const afterRenameNoTags = await trackNow();
+    check('a republish that leaves the tags out keeps them',
+      renamedNoTags.status === 200 && afterRenameNoTags.name === 'Tagged Loop'
+      && afterRenameNoTags.tags.join() === 'skills' && afterRenameNoTags.times.length === 1,
+      JSON.stringify(afterRenameNoTags.tags));
+    check('and its answer says what the track still wears',
+      Array.isArray(renamedNoTagsBody.tags) && renamedNoTagsBody.tags.join() === 'skills',
+      JSON.stringify(renamedNoTagsBody.tags));
+    const newHandle = await repost({
+      author: 'Ada Two', document: sampleDoc('trk-7a7a7a7a', { name: 'Tagged Loop' }),
+    });
+    const afterHandle = await trackNow();
+    check('so does a pilot renaming themselves',
+      newHandle.status === 200 && afterHandle.author === 'Ada Two' && afterHandle.tags.join() === 'skills',
+      JSON.stringify(afterHandle.tags));
+    const nullTags = await repost({ tags: null });
+    const afterNull = await trackNow();
+    check('and a null list is read as no list, not as none',
+      nullTags.status === 200 && afterNull.tags.join() === 'skills', JSON.stringify(afterNull.tags));
     /* And clearing them is one empty list, not an omission: an omitted list
      * is "this builder does not know about tags" and must leave them be. */
     const cleared = await fetch('http://127.0.0.1:3199/api/tracks', {
@@ -1229,9 +1324,12 @@ async function testHttp() {
         tags: [],
       }),
     });
+    const clearedBody = await cleared.json();
     const afterClear = await fetch('http://127.0.0.1:3199/api/tracks/trk-7a7a7a7a').then((r) => r.json());
     check('and a track can be untagged again',
       cleared.status === 200 && afterClear.tags.length === 0);
+    check('and the answer to that says it wears none',
+      Array.isArray(clearedBody.tags) && clearedBody.tags.length === 0, JSON.stringify(clearedBody.tags));
 
     /* ---------------------------------------------------------------- */
     /* The freestyle board                                               */

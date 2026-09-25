@@ -910,9 +910,17 @@ async function handleApi(req, res, url) {
      * and layoutHash getting that wrong silently clears every republished
      * track's times.
      *
-     * In the envelope it is none of those things: an old builder sends no
-     * tags and gets an empty list, a new builder sends tags to an old board
-     * and they are ignored, and nobody's lap times move.
+     * In the envelope it is none of those things. A builder that sends no
+     * tags leaves the track wearing what it wore, and a first publish wears
+     * none; a new builder sends tags to an old board and they are ignored;
+     * and nobody's lap times move.
+     *
+     * LEFT OUT AND EMPTY ARE TWO DIFFERENT REQUESTS. inspectTags hands the
+     * store null for a request with no list, and the store keeps what the
+     * track wore; an empty list is the author taking them all off. Reading
+     * the first as the second is how a rename in the builder, and a pilot
+     * changing the name they fly under, untagged every track they touched,
+     * until 25 September.
      */
     const tagged = inspectTags(body.tags);
     if (tagged.error) {

@@ -1173,15 +1173,27 @@ export const TAGS_MAX = 5;
 /*
  * Clean a tag list, or refuse it.
  *
- * Returns { tags } or { error }. An absent list is an empty list and is
- * fine: tags are optional and every track published before they existed
- * has none. An unknown id is refused rather than dropped, because a builder
- * that offered it and a board that ignored it would disagree silently and
- * the author would never learn their tag did not stick.
+ * Returns { tags } or { error }, and `tags` is null when the request carried
+ * no list at all. NULL IS NOT EMPTY, and the stores keep the two apart. No
+ * list is "leave this track's tags as they are", which is what every
+ * republish that is not about tags sends: the builder putting up a rename,
+ * a pilot who changed the name they fly under, a builder from before tags.
+ * An empty list is the author taking every tag off. A first publish with no
+ * list wears none, because there is nothing yet to leave alone.
+ *
+ * Until 25 September an absent list came back as an empty one, so each of
+ * those republishes wiped the track's tags, and the simulator's comments had
+ * been saying all along that the board left them alone. JSON null counts as
+ * no list: it is how JSON spells absent, and a client that sends it is not
+ * asking for anything to be cleared.
+ *
+ * An unknown id is refused rather than dropped, because a builder that
+ * offered it and a board that ignored it would disagree silently and the
+ * author would never learn their tag did not stick.
  */
 export function inspectTags(raw) {
   if (raw == null) {
-    return { tags: [] };
+    return { tags: null };
   }
   if (!Array.isArray(raw)) {
     return { error: 'Tags are a list.' };

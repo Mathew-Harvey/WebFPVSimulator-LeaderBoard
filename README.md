@@ -123,7 +123,7 @@ to create things in, is in
 | GET | `/api/tracks` | Every published course, with its best time |
 | GET | `/api/tracks/:id` | That course and its leaderboard. Each time carries `{ id, hasGhost }` |
 | GET | `/api/tracks/:id/document` | The full track document, marks included |
-| POST | `/api/tracks` | Publish `{ author, document, editKey? }` |
+| POST | `/api/tracks` | Publish `{ author, document, editKey?, tags? }` |
 | POST | `/api/tracks/:id/times` | Post `{ name, lapMs, ghost? }` |
 | GET | `/api/tracks/:id/times/:timeId/ghost` | That time's recorded lap, `{ id, name, lapMs, ghost }` |
 | GET | `/api/tracks/:id/gif` | That room's card animation, as `image/gif` |
@@ -148,6 +148,12 @@ A first publish returns an `editKey`. Keep it in the browser that sent
 the course. Publishing the same id again without that key is refused.
 Changing the flying layout clears the old times, because they were flown
 on a different course.
+
+Tags travel beside the author rather than inside the document, so
+changing them never clears a time. Leaving `tags` out and sending
+`tags: []` are two different requests: left out, a republish keeps the
+tags the course already wears, and an empty list takes them all off. The
+answer carries the `tags` the course wears afterwards.
 
 ## Signing in
 
