@@ -456,11 +456,12 @@ export function inspectGif({ base64, document }) {
  * from those two tags alone, so a card of any other size would be drawn to
  * the wrong box by the one reader that trusts them.
  *
- * 400 kB AT MOST. The simulator aims under 300 kB, because WhatsApp is known
- * to drop a preview picture larger than that, and a render of a busy
- * town at the quality it starts from lands between 120 and 250 kB. The cap
- * is the aim plus room for a browser whose encoder is less thrifty, and it
- * is far under anything a crawler would refuse.
+ * 400 kB AT MOST. The simulator aims under 300 kB, because WhatsApp is
+ * reported to drop a preview picture larger than that. Drawn from the live
+ * board's own tracks and its one map on 2026-09-25, cards came out between
+ * 53 and 117 kB at the quality the simulator starts from. The cap is the
+ * aim plus room for a browser whose encoder is less thrifty, and it is far
+ * under anything a crawler would refuse.
  *
  * JPEG only. A photograph of a world is what JPEG is for, and one format is
  * one type header on the way out and one magic number on the way in.

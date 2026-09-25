@@ -128,11 +128,15 @@ to create things in, is in
 | GET | `/api/tracks/:id/times/:timeId/ghost` | That time's recorded lap, `{ id, name, lapMs, ghost }` |
 | GET | `/api/tracks/:id/gif` | That room's card animation, as `image/gif` |
 | POST | `/api/tracks/:id/gif` | Upload `{ gif, editKey? }`. Rooms only |
+| GET | `/api/tracks/:id/card` | That track's share card, as `image/jpeg`. HEAD too |
+| POST | `/api/tracks/:id/card` | Upload `{ card, editKey? }`, a 1200 by 630 JPEG |
 | POST | `/api/tracks/:id/remove` | Take it off the board. Admin only |
 | GET | `/api/maps` | Every published freestyle map, each with its drawing and no document |
 | GET | `/api/maps/:id` | That map's summary |
 | GET | `/api/maps/:id/document` | The map document as published, sponsor prints put back whole |
 | POST | `/api/maps` | Publish `{ author, document, plan?, editKey? }` |
+| GET | `/api/maps/:id/card` | That map's share card, as `image/jpeg`. HEAD too |
+| POST | `/api/maps/:id/card` | Upload `{ card, editKey? }`, with the map's own key |
 | POST | `/api/maps/:id/remove` | Take it off the board. Admin only |
 | POST | `/api/admin/login` | Sign in `{ email, password }`, get a session token |
 | GET | `/api/admin/session` | Who the bearer token is, or a 401 |
@@ -283,6 +287,38 @@ that posts it. The board validates the header against that format,
 mirrored in `src/validate.js`, and refuses a blob that does not match the
 lap time beside it. Times posted with a ghost show a mint chase link on
 the board, and the simulator's Ghost row lists them as rivals.
+
+## The share card
+
+Every track and every map can carry a share card: the picture a link to it
+shows when somebody posts it on Facebook, X, WhatsApp, Discord, Slack or
+iMessage. It is a 1200 by 630 JPEG of the thing in the simulator's own
+renderer with the WebFPV wordmark over it, drawn by the browser that
+publishes, in `src/share/card.js` in the simulator, and uploaded here with
+the same edit key the publish used. The board renders nothing, as with the
+animation; `inspectCard` holds the size, the format and the weight.
+
+A track keeps its card through a rename and loses it with a relayout, the
+animation's rule, because the simulator republishes a pilot's tracks in the
+background when they change their name and draws nothing then. A map loses
+its card on every republish, because nothing republishes a map but the
+builder's Publish, which draws the new one straight after.
+
+The listings carry `hasCard` and `cardUtc`, never the bytes. The picture is
+named by the edge in front of webfpv.org, which writes a track's name, its
+record and its card's address into a shared page's head for link preview
+bots only: `edge/preview.js` in the simulator. The card's address carries
+`?v=` with its stamp, so it is cached for good and a new card is a new URL.
+
+**Copy link hands out `?track=` and `?map=`, not `#track=`.** A fragment
+never leaves the browser, so a crawler asked for `#track=` fetches the
+board's front page and draws the board's own card. The page swaps the query
+for the hash as it loads, so everything else routes as before, and every
+`#track=` link already out there still opens its sheet.
+
+Everything published before cards existed has none and no reachable edit
+key. The simulator's `scripts/boardcards.js` draws theirs and uploads them
+with `BOARD_ADMIN_TOKEN`.
 
 ## Site statistics
 
