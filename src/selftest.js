@@ -32,6 +32,7 @@ import {
   mapRowToSummary, mapSummaryOf, openStore, rowToSummary, summaryOf,
 } from './store.js';
 import { guessSimOrigin, landingOrigin, isLoopback } from '../public/origins.js';
+import { testStatsClient } from './stats-client-test.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let failed = 0;
@@ -2420,6 +2421,7 @@ testAdmin();
 await testValidate();
 await testStore();
 await testMaps();
+failed += await testStatsClient();
 await testStats();
 await testHttp();
 console.log(failed ? `\n${failed} failed` : '\nall passed');

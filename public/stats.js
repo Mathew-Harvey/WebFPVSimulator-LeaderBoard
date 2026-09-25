@@ -212,7 +212,7 @@ export function heldSource() {
  * Same-origin referrers are folded to null: somebody navigating within
  * webfpv.org is not an external referrer.
  */
-function extractHostname(urlOrDomain) {
+export function extractHostname(urlOrDomain) {
   /* Try parsing as a URL first (handles http://example.com/path). */
   try {
     const parsed = new URL(urlOrDomain);
@@ -229,7 +229,7 @@ function extractHostname(urlOrDomain) {
   }
 }
 
-function isSameHost(hostname, loc) {
+export function isSameHost(hostname, loc) {
   if (!hostname || !loc) {
     return false;
   }
@@ -362,7 +362,7 @@ export function markVisit() {
  */
 const SESSION_ATTR_KEY = 'webfpv.session.attribution';
 
-function storeSessionAttribution(referrer, ref) {
+export function storeSessionAttribution(referrer, ref) {
   try {
     /* Always write both keys. A null value clears the stale sessionStorage
      * value, so don't skip the write when both are null. */
