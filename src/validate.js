@@ -212,33 +212,37 @@ function usableLogo(value) {
  * stores what it was given and the simulator is the reader that decides what
  * a gate means, so anything wrong here is refused with a sentence rather
  * than quietly dropped.
+ *
+ * `noun` is what the sentences call the thing: a freestyle map wears logos
+ * under exactly these rules, and a refusal that called it a track would be
+ * describing something the author did not make.
  */
-function inspectBranding(document) {
+function inspectBranding(document, noun = 'track') {
   const branding = document.branding;
   if (branding == null) {
     return { images: [] };
   }
   if (!isObject(branding)) {
-    return { error: 'That track\u2019s branding is not readable.' };
+    return { error: `That ${noun}\u2019s branding is not readable.` };
   }
   const raw = Array.isArray(branding.logos)
     ? branding.logos
     : (branding.logo != null && branding.logo !== '' ? [{ image: branding.logo }] : []);
   if (raw.length > LOGO_SLOTS) {
-    return { error: `A track carries at most ${LOGO_SLOTS} sponsor logos.` };
+    return { error: `A ${noun} carries at most ${LOGO_SLOTS} sponsor logos.` };
   }
   const images = [];
   let spent = 0;
   for (const entry of raw) {
     const image = typeof entry === 'string' ? entry : (isObject(entry) ? entry.image : null);
     if (!usableLogo(image)) {
-      return { error: 'A sponsor logo has to travel inside the track as an embedded image.' };
+      return { error: `A sponsor logo has to travel inside the ${noun} as an embedded image.` };
     }
     spent += image.length;
     images.push(image);
   }
   if (spent > BRANDING_MAX_CHARS) {
-    return { error: `A track\u2019s sponsor logos share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
+    return { error: `A ${noun}\u2019s sponsor logos share ${Math.round(BRANDING_MAX_CHARS / 1024)} kB and these come to ${Math.round(spent / 1024)} kB.` };
   }
   return { images };
 }
@@ -670,6 +674,301 @@ export function inspectDocument(raw) {
     layoutHash: layoutHash(document),
     plan: planFromDocument(document),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Freestyle maps                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A MAP IS A LIST OF REFERENCES, NOT A PILE OF MODELS.
+ *
+ * A freestyle map is the same schema.md document a track is, with `mode`
+ * set to 'freestyle', and every piece in it is a reference: a `type` the
+ * simulator already knows how to build, plus what makes this one different,
+ * which is where it stands, which way it faces, its size, its style and the
+ * variant its seed rolls. The meshes, textures and colliders live in the
+ * simulator's code and never come near this board. Hibari Yard, the
+ * simulator's starter map, is fifty two pieces in about nine kilobytes.
+ *
+ * THERE IS NO LIST OF PIECE TYPES HERE, on purpose. Pieces are being added
+ * to the simulator all the time, and a list in this file would refuse every
+ * map that used a new one until this repository was changed and deployed.
+ * A type is checked for being a short word and nothing more, and the
+ * simulator stays the reader that decides what a piece is, which is the
+ * arrangement the race tracks already have with gates.
+ *
+ * THE ONE HEAVY THING IS A LOGO, and it is stored once. A map can wear up to
+ * five sponsor logos, 384 kB between them, as data URLs inside the document,
+ * under the same caps a track has. inspectMap takes each one out, names it
+ * by the SHA-256 of its bytes, and leaves "asset:<hash>" where the image was.
+ * The store keeps the bytes under that name, so ten maps wearing one
+ * sponsor hold one copy of it and a map republished fifty times holds one
+ * copy. expandAssets puts the images back on the way out, so the document
+ * the simulator reads is the one it published.
+ *
+ * A map is not a track with the flying order missing, and it is not stored
+ * as one: inspectDocument refuses an empty flying order, which every map
+ * has, and a track's times, layout hash and plan mean nothing on a map.
+ */
+
+export const ASSET_HASH_RE = /^[0-9a-f]{64}$/;
+const ASSET_REF_PREFIX = 'asset:';
+const PIECE_TYPE_RE = /^[A-Za-z][A-Za-z0-9]{0,31}$/;
+
+/* A plot the builder can make, with room either side for one it may make
+ * later. The builder's own default is 160 by 160 m. */
+const MAP_FIELD_MIN = 10;
+const MAP_FIELD_MAX = 2000;
+
+/* How far a coordinate may be from the plot's origin, in metres. Generous,
+ * because the board does not decide where a piece may stand; it only
+ * refuses numbers no plot could hold. */
+const MAP_COORD_MAX = 10_000;
+
+/* One piece's JSON. The largest piece the builder writes today is a couple
+ * of hundred characters; this is headroom for pieces that do not exist yet,
+ * and a wall against one element carrying a payload. */
+const PIECE_MAX_CHARS = 4096;
+
+/* Element types that are not pieces a pilot flies round: an authoring note,
+ * where the quad starts, and paint on the ground. They stay in the
+ * document; they are just not counted on the card. */
+const NOT_A_PIECE = new Set(['label', 'startPads', 'groundLogo']);
+
+function finiteWithin(value, max) {
+  return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= max;
+}
+
+/*
+ * A logo's data URL, split into what the store keeps: its type, its bytes
+ * and the name its bytes give it. usableLogo has already vouched for the
+ * shape, so the base64 decodes.
+ */
+function assetOf(dataUrl) {
+  const mime = dataUrl.slice('data:'.length, dataUrl.indexOf(';'));
+  const bytes = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  return { hash, mime, bytes };
+}
+
+export function assetRefOf(image) {
+  if (typeof image !== 'string' || !image.startsWith(ASSET_REF_PREFIX)) {
+    return null;
+  }
+  const hash = image.slice(ASSET_REF_PREFIX.length);
+  return ASSET_HASH_RE.test(hash) ? hash : null;
+}
+
+/* Every asset a stored map document refers to, once each. */
+export function assetHashesOf(document) {
+  const out = new Set();
+  const logos = isObject(document?.branding) && Array.isArray(document.branding.logos)
+    ? document.branding.logos : [];
+  for (const logo of logos) {
+    const hash = assetRefOf(isObject(logo) ? logo.image : null);
+    if (hash) {
+      out.add(hash);
+    }
+  }
+  return [...out];
+}
+
+/*
+ * The document as the simulator published it: every "asset:<hash>" turned
+ * back into the data URL it came from. `lookup(hash)` returns { mime, bytes }
+ * or null. A reference with nothing behind it drops that one logo rather
+ * than handing the simulator a string it would refuse; the pieces that wore
+ * it fall back to the next logo, the way they do in the builder.
+ */
+export function expandAssets(document, lookup) {
+  const out = JSON.parse(JSON.stringify(document));
+  if (!isObject(out.branding) || !Array.isArray(out.branding.logos)) {
+    return out;
+  }
+  const kept = [];
+  for (const logo of out.branding.logos) {
+    const hash = assetRefOf(isObject(logo) ? logo.image : null);
+    if (!hash) {
+      kept.push(logo);
+      continue;
+    }
+    const asset = lookup(hash);
+    if (!asset) {
+      continue;
+    }
+    kept.push({ ...logo, image: `data:${asset.mime};base64,${Buffer.from(asset.bytes).toString('base64')}` });
+  }
+  out.branding.logos = kept;
+  return out;
+}
+
+/*
+ * Returns { error } or { document, id, name, pieces, gaps, hasLogo, assets }:
+ * `document` carries asset references in place of its logos, and `assets`
+ * is the list of { hash, mime, bytes } those references name, once each.
+ *
+ * Refused rather than repaired, like a track: the board stores what it was
+ * given, so anything it cannot store is a sentence back to the author.
+ */
+export function inspectMap(raw) {
+  const packed = typeof raw === 'string' ? raw : JSON.stringify(raw ?? null);
+  if (packed.length > MAX_DOCUMENT_CHARS) {
+    return { error: 'That map is too large to publish.' };
+  }
+  let document = raw;
+  if (typeof raw === 'string') {
+    try {
+      document = JSON.parse(raw);
+    } catch (e) {
+      return { error: 'That map is not valid JSON.' };
+    }
+  }
+  if (!isObject(document)) {
+    return { error: 'That file is not a map document.' };
+  }
+  /* Maps arrived with version 3, and nothing about a map needs another. A
+   * new PIECE is not a new version: the schema's own rule is that a new
+   * element type, or an optional field with a default, is not a bump. */
+  if (document.schemaVersion !== 3) {
+    return { error: 'This board accepts schemaVersion 3 maps.' };
+  }
+  if (document.mode !== 'freestyle') {
+    return { error: 'That is a race track, not a freestyle map. Publish it as a track.' };
+  }
+  const id = String(document.id || '');
+  if (!TRACK_ID_RE.test(id)) {
+    return { error: 'That map has no usable id.' };
+  }
+  const name = String(document.name || '').trim() || 'Untitled map';
+  const field = document.field;
+  if (!isObject(field)
+    || !finiteWithin(field.width, MAP_FIELD_MAX) || field.width < MAP_FIELD_MIN
+    || !finiteWithin(field.depth, MAP_FIELD_MAX) || field.depth < MAP_FIELD_MIN) {
+    return { error: 'That map is missing its plot, or its plot is not a size a map can be.' };
+  }
+  if (!Array.isArray(document.elements)) {
+    return { error: 'That map is missing its pieces.' };
+  }
+  let pieces = 0;
+  let gaps = 0;
+  for (const el of document.elements) {
+    if (!isObject(el) || typeof el.type !== 'string' || !PIECE_TYPE_RE.test(el.type)) {
+      return { error: 'A piece in that map does not say what it is.' };
+    }
+    const at = el.position;
+    if (!isObject(at) || !finiteWithin(at.x, MAP_COORD_MAX) || !finiteWithin(at.y, MAP_COORD_MAX)
+      || (at.z != null && !finiteWithin(at.z, MAP_COORD_MAX))) {
+      return { error: 'A piece in that map is not anywhere on the plot.' };
+    }
+    if (JSON.stringify(el).length > PIECE_MAX_CHARS) {
+      return { error: 'A piece in that map carries more than a piece can.' };
+    }
+    if (el.type === 'gap') {
+      gaps += 1;
+    }
+    if (!NOT_A_PIECE.has(el.type)) {
+      pieces += 1;
+    }
+  }
+  if (pieces < 1) {
+    return { error: 'A published map needs at least one piece on it.' };
+  }
+  /* A map's logos are exactly a track's: the same caps and the same rule
+   * that each one is an embedded image, so a logo that fits on one fits on
+   * the other. Only the version 3 spelling, `branding.logos`, because no
+   * map was ever written in the older one. */
+  if (document.branding != null && !isObject(document.branding)) {
+    return { error: 'That map’s branding is not readable.' };
+  }
+  const logosIn = isObject(document.branding) && Array.isArray(document.branding.logos)
+    ? document.branding.logos : [];
+  const branding = inspectBranding({ branding: { logos: logosIn } }, 'map');
+  if (branding.error) {
+    return { error: branding.error };
+  }
+  const stored = JSON.parse(JSON.stringify(document));
+  const assets = new Map();
+  if (logosIn.length) {
+    stored.branding.logos = stored.branding.logos.map((logo) => {
+      const asset = assetOf(typeof logo === 'string' ? logo : logo.image);
+      assets.set(asset.hash, asset);
+      const image = `${ASSET_REF_PREFIX}${asset.hash}`;
+      return isObject(logo) ? { ...logo, image } : { image };
+    });
+  }
+  return {
+    document: stored,
+    id,
+    name: name.slice(0, 80),
+    pieces,
+    gaps,
+    hasLogo: assets.size > 0,
+    assets: [...assets.values()],
+  };
+}
+
+/*
+ * THE CARD'S DRAWING COMES FROM THE SIMULATOR, which is the one exception to
+ * the rule that a plan is read off the stored document here.
+ *
+ * A track's plan can be read off here because this file knows what a gate
+ * looks like from above. It does not know what a crane looks like, and by
+ * the reasoning above it must not: a list of footprints here would be the
+ * list of piece types by another name. So the builder, which already draws
+ * every piece's outline on its own 2D canvas, sends those outlines beside
+ * the document when it publishes, and this checks that they are a drawing
+ * and nothing else: at most one outline per piece, a handful of points
+ * each, every number finite and near the plot. A piece added to the
+ * simulator next week is drawn on this board by the builder that knows it.
+ *
+ * { width, depth, marks: [{ t, k, p: [[x, y], ...], n? }] }: the piece's
+ * type, its kind (a closed list, because all it picks is a colour), its
+ * outline in metres, and a named gap's name.
+ */
+export const MAP_PLAN_KINDS = ['structure', 'gap', 'aperture', 'obstacle', 'marker', 'start', 'decal', 'other'];
+const PLAN_POINTS_MAX = 16;
+const PLAN_NAME_MAX = 40;
+const MAP_PLAN_MAX_CHARS = 200_000;
+
+function metres(value) {
+  return Math.round(value * 100) / 100;
+}
+
+export function inspectMapPlan(raw, inspected) {
+  const field = inspected.document.field;
+  const plan = { width: metres(field.width), depth: metres(field.depth), marks: [] };
+  /* No drawing at all is an empty plot rather than a refusal: the map is
+   * the thing being published, and the picture of it is a courtesy. */
+  if (raw == null) {
+    return { plan };
+  }
+  if (!isObject(raw) || !Array.isArray(raw.marks)) {
+    return { error: 'That map’s drawing is not readable.' };
+  }
+  if (JSON.stringify(raw).length > MAP_PLAN_MAX_CHARS || raw.marks.length > inspected.document.elements.length) {
+    return { error: 'That map’s drawing has more in it than the map does.' };
+  }
+  const reach = Math.max(field.width, field.depth) * 2;
+  for (const mark of raw.marks) {
+    if (!isObject(mark) || typeof mark.t !== 'string' || !PIECE_TYPE_RE.test(mark.t)
+      || !Array.isArray(mark.p) || mark.p.length < 2 || mark.p.length > PLAN_POINTS_MAX) {
+      return { error: 'That map’s drawing is not readable.' };
+    }
+    const points = [];
+    for (const pt of mark.p) {
+      if (!Array.isArray(pt) || pt.length !== 2 || !finiteWithin(pt[0], reach) || !finiteWithin(pt[1], reach)) {
+        return { error: 'That map’s drawing reaches off the plot.' };
+      }
+      points.push([metres(pt[0]), metres(pt[1])]);
+    }
+    const out = { t: mark.t, k: MAP_PLAN_KINDS.includes(mark.k) ? mark.k : 'other', p: points };
+    if (typeof mark.n === 'string' && mark.n.trim()) {
+      out.n = mark.n.trim().slice(0, PLAN_NAME_MAX);
+    }
+    plan.marks.push(out);
+  }
+  return { plan };
 }
 
 /* ------------------------------------------------------------------ */

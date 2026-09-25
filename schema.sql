@@ -219,3 +219,74 @@ CREATE TABLE IF NOT EXISTS stats_dims (
 -- No second index. The primary key leads on day, so the thirty day window
 -- the page reads is a range scan over the key that already exists, and a
 -- separate index on day would be a copy of its first column.
+
+-- ------------------------------------------------------------------
+-- Published freestyle maps, and the pictures they wear.
+-- ------------------------------------------------------------------
+--
+-- A MAP IS A LIST OF REFERENCES, NOT A PILE OF MODELS. Every piece in the
+-- stored document names a piece the simulator already knows how to build,
+-- building, containers, crane, and carries only what makes this one
+-- different: where it stands, which way it faces, its size, its style and
+-- its variant. The meshes and textures live in the simulator's code and
+-- never reach this database. The starter map is fifty two pieces in about
+-- nine kilobytes. See inspectMap in src/validate.js, which is also where it
+-- is written down why this board keeps no list of piece types.
+--
+-- The one heavy thing a map can carry is a sponsor logo, and those are in
+-- `assets`, ONCE EACH, named by the SHA-256 of their bytes. The stored
+-- document says "asset:<hash>" where the image was, and the board puts the
+-- image back when the document is read. Ten maps wearing one sponsor hold
+-- one copy of it, and a map republished fifty times holds one copy.
+--
+-- `map_assets` is which map refers to which asset. It is what lets an
+-- image nobody refers to any more be taken away without a scan of every
+-- document, and the foreign key is what stops one being taken away while a
+-- map still wears it.
+--
+-- `plan` is the card's drawing, outlines the simulator measured when the
+-- map was published. It is NOT read off the document here the way a
+-- track's is, because that would need the list of pieces this board does
+-- not keep. See inspectMapPlan.
+--
+-- No times and no layout hash: nothing is raced on a map, so there is
+-- nothing a relayout could invalidate.
+--
+-- Additive: an existing database gains these three tables the next time the
+-- process starts, and nothing in tracks, times, runs, bugs or the
+-- statistics is rewritten.
+
+CREATE TABLE IF NOT EXISTS maps (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  author TEXT NOT NULL,
+  document JSONB NOT NULL,
+  plan JSONB NOT NULL,
+  edit_key_hash TEXT NOT NULL,
+  pieces INTEGER NOT NULL,
+  gaps INTEGER NOT NULL,
+  has_logo BOOLEAN NOT NULL DEFAULT FALSE,
+  published_utc TIMESTAMPTZ NOT NULL,
+  updated_utc TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS maps_author ON maps (lower(author));
+
+-- BYTEA for the same reason the card animation is: an image is bytes, it is
+-- served as bytes, and base64 would be a third more of them.
+CREATE TABLE IF NOT EXISTS assets (
+  hash TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  bytes BYTEA NOT NULL,
+  created_utc TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS map_assets (
+  map_id TEXT NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+  hash TEXT NOT NULL REFERENCES assets(hash),
+  PRIMARY KEY (map_id, hash)
+);
+
+-- The primary key leads on map_id; "does anything still wear this image"
+-- asks by hash.
+CREATE INDEX IF NOT EXISTS map_assets_hash ON map_assets (hash);

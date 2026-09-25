@@ -38,9 +38,9 @@ import {
   adminCount, checkPassword, mintSession, normaliseEmail, readSession, PASSWORD_MAX,
 } from './admin.js';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectRun,
-  inspectStatsEvent, inspectTags, normaliseCountry, normaliseLapMs, normaliseName,
-  normaliseThreeMs, statsDay,
+  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectMap,
+  inspectMapPlan, inspectRun, inspectStatsEvent, inspectTags, normaliseCountry, normaliseLapMs,
+  normaliseName, normaliseThreeMs, statsDay,
   BUG_ID_RE, BUG_KINDS, BUG_STATUSES, MAX_GIF_BASE64_CHARS, RUN_MAPS, TAGS,
   TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
@@ -1015,6 +1015,138 @@ async function handleApi(req, res, url) {
       return;
     }
     send(res, 200, row);
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Freestyle maps                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * THE SAME SHAPE AS THE TRACKS, route for route, because the simulator
+   * talks to both the same way: a list without documents, one summary, the
+   * document at its own address, an admin's remove, and one POST that
+   * publishes the first time and updates with the edit key after that.
+   *
+   * Separate addresses rather than a flag on /api/tracks, and that is what
+   * keeps every reader of the tracks list exactly as it was. The simulator's
+   * Track room, its "most flown" pick and its twin finder all read that list
+   * and treat everything in it as a race track; a map arriving there would
+   * be flown as one.
+   */
+  if (req.method === 'GET' && path === '/api/maps') {
+    send(res, 200, { maps: await store.listMaps() });
+    return;
+  }
+
+  const mapOne = path.match(/^\/api\/maps\/([^/]+)$/);
+  if (req.method === 'GET' && mapOne) {
+    const id = trackIdFrom(mapOne[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const map = await store.getMap(id);
+    if (!map) {
+      send(res, 404, { error: 'That map is not on the board.' });
+      return;
+    }
+    send(res, 200, map);
+    return;
+  }
+
+  /* The document as it was published, sponsor logos and all: the store
+   * puts each image back where its reference is. What the simulator reads
+   * to fly a map, and nothing else asks for it. */
+  const mapDoc = path.match(/^\/api\/maps\/([^/]+)\/document$/);
+  if (req.method === 'GET' && mapDoc) {
+    const id = trackIdFrom(mapDoc[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const payload = await store.getMapDocument(id);
+    if (!payload) {
+      send(res, 404, { error: 'That map is not on the board.' });
+      return;
+    }
+    send(res, 200, payload);
+    return;
+  }
+
+  /* An admin's, like a track's, and logged for the same reason: it is the
+   * one write that removes somebody else's work. The images the map wore
+   * go with it unless another map still wears them. */
+  const mapRemove = path.match(/^\/api\/maps\/([^/]+)\/remove$/);
+  if (req.method === 'POST' && mapRemove) {
+    const who = adminIdentity(req);
+    if (!who) {
+      send(res, 403, { error: 'Removing a map from this board needs an admin.' });
+      return;
+    }
+    const id = trackIdFrom(mapRemove[1]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const gone = await store.removeMap(id);
+    if (!gone) {
+      send(res, 404, { error: 'That map is not on the board.' });
+      return;
+    }
+    console.log(`removed map ${gone.id} "${gone.name}" by ${gone.author}, by ${who.email || 'BOARD_ADMIN_TOKEN'}`);
+    send(res, 200, { id: gone.id, name: gone.name, author: gone.author });
+    return;
+  }
+
+  /*
+   * Publishing a map, or updating one with its key. The body is the track
+   * route's envelope with a drawing beside the document: { author,
+   * document, plan, editKey? }. The drawing is the outline of every piece,
+   * measured by the builder, and the reason it travels at all is written at
+   * inspectMapPlan.
+   */
+  if (req.method === 'POST' && path === '/api/maps') {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req, undefined, 'That map is too large to publish.'));
+    } catch (e) {
+      if (e && e.status) {
+        throw e;
+      }
+      send(res, 400, { error: e.message || 'That request was not JSON.' });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      send(res, 400, { error: 'That request was not a JSON object.' });
+      return;
+    }
+    const author = normaliseName(body.author);
+    if (!author) {
+      send(res, 400, { error: 'A published map needs a name, two to twenty four letters, numbers, spaces, dots, underscores or hyphens.' });
+      return;
+    }
+    const inspected = inspectMap(body.document);
+    if (inspected.error) {
+      send(res, 400, { error: inspected.error });
+      return;
+    }
+    const drawn = inspectMapPlan(body.plan, inspected);
+    if (drawn.error) {
+      send(res, 400, { error: drawn.error });
+      return;
+    }
+    const result = await store.publishMap({
+      inspected,
+      plan: drawn.plan,
+      author,
+      editKey: typeof body.editKey === 'string' ? body.editKey : '',
+    });
+    if (result.error) {
+      send(res, result.status || 400, { error: result.error, conflict: Boolean(result.conflict) });
+      return;
+    }
+    send(res, result.updated ? 200 : 201, result);
     return;
   }
 

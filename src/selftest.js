@@ -10,7 +10,9 @@
  * your option) any later version.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp, readFile, rm, writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -20,12 +22,15 @@ import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
   creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
   inspectStatsEvent, normaliseCountry, statsDay,
+  expandAssets, inspectMap, inspectMapPlan,
 } from './validate.js';
 import { sourceKey } from './sponsors.js';
 import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
 } from './admin.js';
-import { openStore, rowToSummary, summaryOf } from './store.js';
+import {
+  mapRowToSummary, mapSummaryOf, openStore, rowToSummary, summaryOf,
+} from './store.js';
 import { guessSimOrigin, landingOrigin, isLoopback } from '../public/origins.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -659,6 +664,168 @@ async function testStore() {
   await rm(legacyDir, { recursive: true, force: true });
 }
 
+/*
+ * A freestyle map as the simulator's builder writes one: version 3, mode
+ * freestyle, an empty flying order, a start, one building and one named gap.
+ * Written out here rather than imported, because this repository does not
+ * import the simulator and a test that did would pass against a copy.
+ */
+const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const GIF_1PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=';
+
+function sampleMap(id = 'trk-5eed0001', extra = {}) {
+  return {
+    schemaVersion: 3,
+    id,
+    name: 'Test Yard',
+    trackClass: 'full',
+    mode: 'freestyle',
+    field: { width: 160, depth: 160, gridSize: 1 },
+    branding: { logos: [] },
+    credit: null,
+    elements: [
+      {
+        id: 'el-1', type: 'startPads', name: '', position: { x: 10, y: 10, z: 0 }, yaw: 0, dims: { pads: 4, spacing: 1.5, padSize: 0.6 },
+      },
+      {
+        id: 'el-2', type: 'building', name: '', position: { x: 40, y: 60, z: 0 }, yaw: 0, dims: { width: 16, depth: 14, floors: 4, variant: 2 }, style: 'office',
+      },
+      {
+        id: 'el-3', type: 'gap', name: 'ROOF GAP', position: { x: 40, y: 70, z: 12 }, yaw: 0, dims: { width: 4, height: 3 }, points: 250,
+      },
+    ],
+    sequence: [],
+    ...extra,
+  };
+}
+
+async function testMaps() {
+  console.log('maps');
+  const ok = inspectMap(sampleMap());
+  check('a freestyle map is accepted with no flying order', !ok.error, ok.error);
+  check('and its card counts pieces, not the start or the paint', ok.pieces === 2 && ok.gaps === 1, `${ok.pieces} pieces ${ok.gaps} gaps`);
+  check('a race track sent as a map is refused, and told where it goes',
+    /race track/.test(inspectMap(sampleMap('trk-5eed0001', { mode: undefined })).error || ''));
+  check('a map is refused by the track route, as before: a map is not a track with the order missing',
+    /flying order/.test(inspectDocument(sampleMap()).error || ''));
+  check('an older schema is refused', Boolean(inspectMap(sampleMap('trk-5eed0001', { schemaVersion: 2 })).error));
+  check('an unusable id is refused', Boolean(inspectMap(sampleMap('map-1')).error));
+  check('a plot too small to be a map is refused', Boolean(inspectMap(sampleMap('trk-5eed0001', { field: { width: 2, depth: 160 } })).error));
+  check('a map of nothing but a start is refused',
+    Boolean(inspectMap(sampleMap('trk-5eed0001', { elements: [sampleMap().elements[0]] })).error));
+  /*
+   * THE ONE THAT MATTERS MOST. Pieces are added to the simulator all the
+   * time and this board keeps no list of them, so a map built from a piece
+   * that did not exist when this file was written has to be stored.
+   */
+  const newPiece = { id: 'el-9', type: 'skateBowl', name: '', position: { x: 90, y: 90, z: 0 }, yaw: 1.2, dims: { width: 12, depth: 9 }, style: 'concrete' };
+  const withNew = inspectMap(sampleMap('trk-5eed0001', { elements: [...sampleMap().elements, newPiece] }));
+  check('a piece this board has never heard of is stored as it came', !withNew.error
+    && withNew.document.elements.some((e) => e.type === 'skateBowl' && e.style === 'concrete'), withNew.error);
+  for (const bad of ['<b>', '', 42, 'x'.repeat(40)]) {
+    const els = [...sampleMap().elements, { ...newPiece, type: bad }];
+    check(`a piece whose type is not a word is refused: ${JSON.stringify(bad).slice(0, 12)}`,
+      Boolean(inspectMap(sampleMap('trk-5eed0001', { elements: els })).error));
+  }
+  check('a piece that is nowhere on the plot is refused',
+    Boolean(inspectMap(sampleMap('trk-5eed0001', { elements: [...sampleMap().elements, { ...newPiece, position: { x: 1e9, y: 0, z: 0 } }] })).error));
+  check('a piece carrying a payload is refused',
+    Boolean(inspectMap(sampleMap('trk-5eed0001', { elements: [...sampleMap().elements, { ...newPiece, note: 'x'.repeat(5000) }] })).error));
+
+  /*
+   * THE LOGOS, STORED ONCE. Two slots wearing the same picture are one
+   * asset, the stored document carries a reference and no image, and the
+   * document read back is byte for byte the one that was sent.
+   */
+  const branded = sampleMap('trk-5eed0002', {
+    branding: { logos: [{ id: 'logo-1', image: PNG_1PX, name: 'A' }, { id: 'logo-2', image: PNG_1PX, name: 'B' }, { id: 'logo-3', image: GIF_1PX, name: 'C' }] },
+  });
+  const inspectedBranded = inspectMap(branded);
+  check('three logos, two of them the same picture, are two assets', inspectedBranded.assets.length === 2, `${inspectedBranded.assets.length}`);
+  check('the stored document carries references and no image',
+    !JSON.stringify(inspectedBranded.document).includes('base64')
+    && inspectedBranded.document.branding.logos.every((l) => /^asset:[0-9a-f]{64}$/.test(l.image)));
+  const lookup = (h) => inspectedBranded.assets.find((a) => a.hash === h) || null;
+  check('and the document read back is the one that was sent',
+    JSON.stringify(expandAssets(inspectedBranded.document, lookup)) === JSON.stringify(branded));
+  const notEmbedded = inspectMap(sampleMap('trk-5eed0002', { branding: { logos: [{ id: 'logo-1', image: 'https://example.com/a.png' }] } }));
+  check('a logo that is not an embedded image is refused, in words about a map',
+    /inside the map/.test(notEmbedded.error || ''), notEmbedded.error);
+
+  /* The card's drawing: the builder's outlines, checked for being a
+   * drawing and nothing else. */
+  const empty = inspectMapPlan(null, ok);
+  check('no drawing is an empty plot of the right size', !empty.error && empty.plan.width === 160 && empty.plan.marks.length === 0);
+  const drawn = inspectMapPlan({
+    marks: [
+      { t: 'building', k: 'structure', p: [[32.004, 53], [48, 53], [48, 67], [32, 67]] },
+      { t: 'gap', k: 'gap', p: [[38, 70], [42, 70]], n: '  ROOF GAP  ' },
+      { t: 'skateBowl', k: 'somethingNew', p: [[80, 80], [90, 80], [90, 90]] },
+    ],
+  }, withNew);
+  check('outlines are kept, rounded to the centimetre, with a gap’s name trimmed',
+    !drawn.error && drawn.plan.marks[0].p[0][0] === 32 && drawn.plan.marks[1].n === 'ROOF GAP', drawn.error);
+  check('a kind the board does not know is drawn as other, not refused', drawn.plan.marks[2].k === 'other');
+  check('a drawing with more outlines than the map has pieces is refused',
+    Boolean(inspectMapPlan({ marks: Array.from({ length: 9 }, () => ({ t: 'tree', p: [[1, 1], [2, 2]] })) }, ok).error));
+  check('an outline off the plot is refused',
+    Boolean(inspectMapPlan({ marks: [{ t: 'tree', p: [[1, 1], [9999, 2]] }] }, ok).error));
+
+  /* One contract, two writers, the same check summaryOf and rowToSummary
+   * already live under. */
+  const fileSide = mapSummaryOf({
+    id: 'trk-5eed0001', name: 'Yard', author: 'Ada Rook', pieces: 2, gaps: 1, hasLogo: false, plan: empty.plan, publishedUtc: '', updatedUtc: '',
+  });
+  const pgSide = mapRowToSummary({
+    id: 'trk-5eed0001', name: 'Yard', author: 'Ada Rook', pieces: 2, gaps: 1, has_logo: false, plan: empty.plan, published_utc: '', updated_utc: '',
+  });
+  const keys = (o) => Object.keys(o).sort().join(',');
+  check('the file store and the Postgres row build the same map summary', keys(fileSide) === keys(pgSide), `${keys(fileSide)} | ${keys(pgSide)}`);
+  check('and a summary never carries the document', !('document' in fileSide) && !('document' in pgSide));
+
+  const dir = await mkdtemp(join(tmpdir(), 'webfpv-board-maps-'));
+  process.env.BOARD_FILE = join(dir, 'board.json');
+  delete process.env.DATABASE_URL;
+  const store = await openStore();
+  const first = await store.publishMap({ inspected: inspectedBranded, plan: empty.plan, author: 'Ada Rook', editKey: '' });
+  check('a first publish returns an edit key', Boolean(first.editKey) && first.updated === false);
+  const clash = await store.publishMap({ inspected: inspectedBranded, plan: empty.plan, author: 'Ada Rook', editKey: '' });
+  check('a second publish without the key is refused, in words about a map', clash.status === 409 && /map/.test(clash.error));
+  const again = await store.publishMap({ inspected: inspectedBranded, plan: empty.plan, author: 'Ada Rook', editKey: first.editKey });
+  check('with the key it updates', again.updated === true && !again.editKey);
+  const read = await store.getMapDocument('trk-5eed0002');
+  check('the stored map reads back as the document that was published', JSON.stringify(read.document) === JSON.stringify(branded));
+  const other = inspectMap(sampleMap('trk-5eed0003', { branding: { logos: [{ id: 'logo-1', image: PNG_1PX, name: 'A' }] } }));
+  await store.publishMap({ inspected: other, plan: empty.plan, author: 'Bo Kite', editKey: '' });
+  const onDisk = () => readFile(process.env.BOARD_FILE, 'utf8').then(JSON.parse);
+  check('two maps wearing the same picture hold one copy of it', Object.keys((await onDisk()).assets).length === 2);
+  /* The first map drops its logos: the GIF only it wore goes, the PNG the
+   * second still wears stays. Then the second map goes, and the PNG with it. */
+  const bare = inspectMap(sampleMap('trk-5eed0002'));
+  await store.publishMap({ inspected: bare, plan: empty.plan, author: 'Ada Rook', editKey: first.editKey });
+  const afterDrop = Object.keys((await onDisk()).assets);
+  check('an image nobody wears any more is swept, and one still worn is kept', afterDrop.length === 1
+    && afterDrop[0] === other.assets[0].hash, `${afterDrop.length}`);
+  const gone = await store.removeMap('trk-5eed0003');
+  check('removing a map names it', gone && gone.name === 'Test Yard' && gone.author === 'Bo Kite');
+  check('and the last image goes with the last map that wore it', Object.keys((await onDisk()).assets).length === 0);
+  const listed = await store.listMaps();
+  check('the list has what is left, with its drawing and no document', listed.length === 1
+    && listed[0].id === 'trk-5eed0002' && listed[0].plan && !('document' in listed[0]));
+  check('a missing map is null, not a throw', (await store.getMap('trk-00000000')) === null
+    && (await store.getMapDocument('trk-00000000')) === null && (await store.removeMap('trk-00000000')) === null);
+  await rm(dir, { recursive: true, force: true });
+
+  /* A board.json from before maps: old, not corrupt. */
+  const legacyDir = await mkdtemp(join(tmpdir(), 'webfpv-board-maps-legacy-'));
+  process.env.BOARD_FILE = join(legacyDir, 'board.json');
+  await writeFile(join(legacyDir, 'board.json'), JSON.stringify({ tracks: {}, times: {} }), 'utf8');
+  const legacy = await openStore();
+  const legacyMaps = await legacy.listMaps();
+  check('a board.json from before maps lists no maps rather than starting empty', Array.isArray(legacyMaps) && legacyMaps.length === 0);
+  await rm(legacyDir, { recursive: true, force: true });
+}
+
 function waitFor(child, needle, ms = 8000) {
   return new Promise((resolve, reject) => {
     let buf = '';
@@ -708,6 +875,48 @@ async function testHttp() {
     });
     const body = await created.json();
     check('publish over HTTP', created.status === 201 && body.id === 'trk-1a2b3c4d');
+
+    /* A freestyle map, the whole round: publish, list, read, refuse a
+     * stranger, and an admin's remove. */
+    const mapPost = (payload) => fetch('http://127.0.0.1:3199/api/maps', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const mapDoc = sampleMap('trk-5eed0010', { branding: { logos: [{ id: 'logo-1', image: PNG_1PX, name: 'A' }] } });
+    const mapPlan = { marks: [{ t: 'building', k: 'structure', p: [[32, 53], [48, 53], [48, 67], [32, 67]] }] };
+    const mapMade = await mapPost({ author: 'Ada Rook', document: mapDoc, plan: mapPlan });
+    const mapMadeBody = await mapMade.json();
+    check('publish a map over HTTP', mapMade.status === 201 && mapMadeBody.id === 'trk-5eed0010' && Boolean(mapMadeBody.editKey));
+    const mapList = await fetch('http://127.0.0.1:3199/api/maps').then((r) => r.json());
+    check('the map list carries its drawing and its counts, and no document',
+      mapList.maps.length === 1 && mapList.maps[0].plan.marks.length === 1
+      && mapList.maps[0].pieces === 2 && mapList.maps[0].gaps === 1 && !('document' in mapList.maps[0]));
+    const trackList = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    check('and the track list does not have it, so no reader of tracks flies a map as one',
+      !trackList.tracks.some((t) => t.id === 'trk-5eed0010'));
+    const mapRead = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0010/document').then((r) => r.json());
+    check('the map reads back as it was published, logo and all', JSON.stringify(mapRead.document) === JSON.stringify(mapDoc));
+    const mapStranger = await mapPost({ author: 'Bo Kite', document: mapDoc });
+    check('a stranger republishing it is a 409', mapStranger.status === 409 && (await mapStranger.json()).conflict === true);
+    const mapAsTrack = await fetch('http://127.0.0.1:3199/api/tracks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: 'Ada Rook', document: mapDoc }),
+    });
+    check('the track route still refuses a map', mapAsTrack.status === 400);
+    const trackAsMap = await mapPost({ author: 'Ada Rook', document: sampleDoc('trk-1a2b3c4e') });
+    check('and the map route refuses a track', trackAsMap.status === 400);
+    const mapRemoveNoAdmin = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0010/remove', { method: 'POST' });
+    check('removing a map needs an admin', mapRemoveNoAdmin.status === 403);
+    const mapRemoved = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0010/remove', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    check('an admin can remove a map', mapRemoved.status === 200 && (await mapRemoved.json()).name === 'Test Yard');
+    const mapAfter = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0010');
+    check('and it is gone', mapAfter.status === 404);
+
     const time = await fetch('http://127.0.0.1:3199/api/tracks/trk-1a2b3c4d/times', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1874,6 +2083,7 @@ testOrigins();
 testAdmin();
 await testValidate();
 await testStore();
+await testMaps();
 await testStats();
 await testHttp();
 console.log(failed ? `\n${failed} failed` : '\nall passed');

@@ -27,7 +27,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import {
-  creditOf, hashEditKey, planFromDocument, trackClassOf, STATS_COUNTRY_UNKNOWN,
+  assetHashesOf, creditOf, expandAssets, hashEditKey, planFromDocument, trackClassOf,
+  STATS_COUNTRY_UNKNOWN,
 } from './validate.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -160,6 +161,34 @@ const CONFLICT = {
   conflict: true,
 };
 
+/* The same answer for a map, in the same words about a map. */
+const MAP_CONFLICT = {
+  error: 'This map is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
+  status: 409,
+  conflict: true,
+};
+
+/*
+ * A published map as the API lists it. The document is never in a list: a
+ * map's card needs its outline drawing and its counts, and the document,
+ * logos and all, is fetched by the one reader that flies it. Its Postgres
+ * twin is mapRowToSummary, and the self test holds the two to one key set,
+ * the arrangement summaryOf and rowToSummary already have.
+ */
+export function mapSummaryOf(map) {
+  return {
+    id: map.id,
+    name: map.name,
+    author: map.author,
+    pieces: map.pieces,
+    gaps: map.gaps,
+    hasLogo: Boolean(map.hasLogo),
+    plan: map.plan || null,
+    publishedUtc: map.publishedUtc,
+    updatedUtc: map.updatedUtc,
+  };
+}
+
 export function summaryOf(track, times) {
   const ranked = [...times].sort(byLap);
   const best = ranked[0] || null;
@@ -244,7 +273,13 @@ function summaryRun(row) {
 
 function emptyFile() {
   return {
-    tracks: {}, times: {}, bugs: {}, runs: [], stats: { days: {}, dims: {} },
+    tracks: {},
+    times: {},
+    bugs: {},
+    runs: [],
+    stats: { days: {}, dims: {} },
+    maps: {},
+    assets: {},
   };
 }
 
@@ -406,6 +441,14 @@ class FileStore {
         }
         if (!stats.dims || typeof stats.dims !== 'object' || Array.isArray(stats.dims)) {
           stats.dims = {};
+        }
+      }
+      /* And for maps and the images they wear: a board.json from before
+       * maps were published is old, not corrupt. */
+      for (const key of ['maps', 'assets']) {
+        const held = this.data[key];
+        if (!held || typeof held !== 'object' || Array.isArray(held)) {
+          this.data[key] = {};
         }
       }
     } catch (e) {
@@ -632,6 +675,134 @@ class FileStore {
       return null;
     }
     return { id: row.id, name: row.name, lapMs: row.lapMs, ghost: row.ghost || null };
+  }
+
+  /* ---------------- freestyle maps ---------------- */
+
+  async listMaps() {
+    return Object.values(this.data.maps)
+      .map(mapSummaryOf)
+      .sort((a, b) => String(b.updatedUtc).localeCompare(String(a.updatedUtc)));
+  }
+
+  async getMap(id) {
+    const map = this.data.maps[id];
+    return map ? mapSummaryOf(map) : null;
+  }
+
+  /* The document the simulator published, images back in place. */
+  async getMapDocument(id) {
+    const map = this.data.maps[id];
+    if (!map) {
+      return null;
+    }
+    return {
+      id: map.id,
+      name: map.name,
+      author: map.author,
+      document: expandAssets(map.document, (hash) => this.assetOf(hash)),
+    };
+  }
+
+  assetOf(hash) {
+    const held = this.data.assets[hash];
+    return held ? { mime: held.mime, bytes: Buffer.from(held.base64, 'base64') } : null;
+  }
+
+  async getAsset(hash) {
+    return this.assetOf(hash);
+  }
+
+  async publishMap({ inspected, plan, author, editKey }) {
+    return this.lock(() => this.publishMapUnlocked({ inspected, plan, author, editKey }));
+  }
+
+  /*
+   * The same key rule a track has: the first publish mints a key and hands
+   * it back once, a later one needs it, and a stranger's map is a 409 that
+   * says to publish a copy instead.
+   *
+   * The images are written BEFORE the map that refers to them and swept
+   * AFTER it, so there is no moment at which the file holds a reference
+   * with nothing behind it. Everything happens under the one lock, which is
+   * why this backend needs none of the Postgres side's care about a sweep
+   * racing a publish.
+   */
+  async publishMapUnlocked({ inspected, plan, author, editKey }) {
+    const existing = this.data.maps[inspected.id];
+    let key = editKey;
+    if (existing) {
+      if (!editKey || hashEditKey(editKey) !== existing.editKeyHash) {
+        return { ...MAP_CONFLICT };
+      }
+    } else {
+      key = randomBytes(16).toString('hex');
+    }
+    const before = existing ? assetHashesOf(existing.document) : [];
+    for (const asset of inspected.assets) {
+      if (!this.data.assets[asset.hash]) {
+        this.data.assets[asset.hash] = {
+          mime: asset.mime,
+          base64: asset.bytes.toString('base64'),
+          createdUtc: nowIso(),
+        };
+      }
+    }
+    this.data.maps[inspected.id] = {
+      id: inspected.id,
+      name: inspected.name,
+      author,
+      document: inspected.document,
+      plan,
+      editKeyHash: hashEditKey(key),
+      pieces: inspected.pieces,
+      gaps: inspected.gaps,
+      hasLogo: inspected.hasLogo,
+      publishedUtc: existing ? existing.publishedUtc : nowIso(),
+      updatedUtc: nowIso(),
+    };
+    this.sweepAssets(before);
+    await this.flush();
+    return {
+      id: inspected.id,
+      name: inspected.name,
+      author,
+      editKey: existing ? undefined : key,
+      updated: Boolean(existing),
+    };
+  }
+
+  async removeMap(id) {
+    return this.lock(async () => {
+      const map = this.data.maps[id];
+      if (!map) {
+        return null;
+      }
+      delete this.data.maps[id];
+      this.sweepAssets(assetHashesOf(map.document));
+      await this.flush();
+      return { id: map.id, name: map.name, author: map.author };
+    });
+  }
+
+  /* Drop any of `hashes` that no map wears any more. Only the images the
+   * write in hand stopped referring to are candidates, so a sweep is a look
+   * at a handful of names rather than at the whole store. */
+  sweepAssets(hashes) {
+    if (!hashes.length) {
+      return;
+    }
+    const worn = new Set();
+    for (const map of Object.values(this.data.maps)) {
+      for (const hash of assetHashesOf(map.document)) {
+        worn.add(hash);
+      }
+    }
+    for (const hash of hashes) {
+      if (!worn.has(hash)) {
+        delete this.data.assets[hash];
+      }
+    }
   }
 
   async listRuns({ map } = {}) {
@@ -1209,6 +1380,188 @@ class PgStore {
     return found.rowCount ? found.rows[0] : null;
   }
 
+  /* ---------------- freestyle maps ---------------- */
+
+  /* Named columns and never the document: a list is every map on the
+   * board, and the documents, logos and all, are fetched one at a time by
+   * the simulator that flies them. */
+  async listMaps() {
+    const found = await this.pool.query(`
+      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc
+      FROM maps ORDER BY updated_utc DESC
+    `);
+    return found.rows.map(mapRowToSummary);
+  }
+
+  async getMap(id) {
+    const found = await this.pool.query(`
+      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc
+      FROM maps WHERE id = $1
+    `, [id]);
+    return found.rowCount ? mapRowToSummary(found.rows[0]) : null;
+  }
+
+  async getMapDocument(id) {
+    const found = await this.pool.query('SELECT id, name, author, document FROM maps WHERE id = $1', [id]);
+    if (!found.rowCount) {
+      return null;
+    }
+    const row = found.rows[0];
+    const hashes = assetHashesOf(row.document);
+    const assets = new Map();
+    if (hashes.length) {
+      const held = await this.pool.query('SELECT hash, mime, bytes FROM assets WHERE hash = ANY($1)', [hashes]);
+      for (const a of held.rows) {
+        assets.set(a.hash, { mime: a.mime, bytes: a.bytes });
+      }
+    }
+    return {
+      id: row.id,
+      name: row.name,
+      author: row.author,
+      document: expandAssets(row.document, (hash) => assets.get(hash) || null),
+    };
+  }
+
+  async getAsset(hash) {
+    const found = await this.pool.query('SELECT mime, bytes FROM assets WHERE hash = $1', [hash]);
+    return found.rowCount ? { mime: found.rows[0].mime, bytes: found.rows[0].bytes } : null;
+  }
+
+  /*
+   * One transaction: the images first, ON CONFLICT DO NOTHING, which is the
+   * whole of the deduplication, then the map, then the map's list of the
+   * images it wears, replaced whole. The images it stopped wearing are
+   * swept after the commit.
+   *
+   * THE ONE RACE, AND WHY IT IS HANDLED BY A RETRY. A sweep here and a
+   * publish somewhere else can meet on one old image: this map stops
+   * wearing it and sweeps it at the moment another map starts wearing it.
+   * The foreign key on map_assets makes that an error rather than a map
+   * with a hole in it. If the sweep loses, it fails and is ignored, because
+   * the image is still worn. If the publish loses, the image it named has
+   * just gone and the publish fails with 23503, and running it once more
+   * writes the image back. Two authors changing the same sponsor's logo in
+   * the same second is the whole of the exposure.
+   */
+  async publishMap(args) {
+    try {
+      return await this.publishMapOnce(args);
+    } catch (e) {
+      if (e && e.code === '23503') {
+        return this.publishMapOnce(args);
+      }
+      throw e;
+    }
+  }
+
+  async publishMapOnce({ inspected, plan, author, editKey }) {
+    const client = await this.pool.connect();
+    let before = [];
+    let result;
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query('SELECT edit_key_hash FROM maps WHERE id = $1 FOR UPDATE', [inspected.id]);
+      let key = editKey;
+      if (existing.rowCount) {
+        if (!editKey || hashEditKey(editKey) !== existing.rows[0].edit_key_hash) {
+          await client.query('ROLLBACK');
+          return { ...MAP_CONFLICT };
+        }
+        const worn = await client.query('SELECT hash FROM map_assets WHERE map_id = $1', [inspected.id]);
+        before = worn.rows.map((r) => r.hash);
+      } else {
+        key = randomBytes(16).toString('hex');
+      }
+      for (const asset of inspected.assets) {
+        await client.query(
+          `INSERT INTO assets (hash, mime, bytes, created_utc) VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (hash) DO NOTHING`,
+          [asset.hash, asset.mime, asset.bytes],
+        );
+      }
+      if (existing.rowCount) {
+        await client.query(
+          `UPDATE maps SET
+            name = $2, author = $3, document = $4, plan = $5, pieces = $6, gaps = $7,
+            has_logo = $8, updated_utc = NOW()
+           WHERE id = $1`,
+          [
+            inspected.id, inspected.name, author, inspected.document, plan,
+            inspected.pieces, inspected.gaps, inspected.hasLogo,
+          ],
+        );
+        await client.query('DELETE FROM map_assets WHERE map_id = $1', [inspected.id]);
+      } else {
+        await client.query(
+          `INSERT INTO maps (
+            id, name, author, document, plan, edit_key_hash, pieces, gaps, has_logo,
+            published_utc, updated_utc
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
+          [
+            inspected.id, inspected.name, author, inspected.document, plan, hashEditKey(key),
+            inspected.pieces, inspected.gaps, inspected.hasLogo,
+          ],
+        );
+      }
+      for (const asset of inspected.assets) {
+        await client.query('INSERT INTO map_assets (map_id, hash) VALUES ($1, $2)', [inspected.id, asset.hash]);
+      }
+      await client.query('COMMIT');
+      result = {
+        id: inspected.id,
+        name: inspected.name,
+        author,
+        editKey: existing.rowCount ? undefined : key,
+        updated: Boolean(existing.rowCount),
+      };
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (ignored) {
+        /* Connection may already be dead. */
+      }
+      if (e.code === '23505') {
+        return { ...MAP_CONFLICT };
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+    const kept = new Set(inspected.assets.map((a) => a.hash));
+    await this.sweepAssets(before.filter((hash) => !kept.has(hash)));
+    return result;
+  }
+
+  async removeMap(id) {
+    const worn = await this.pool.query('SELECT hash FROM map_assets WHERE map_id = $1', [id]);
+    const gone = await this.pool.query('DELETE FROM maps WHERE id = $1 RETURNING id, name, author', [id]);
+    if (!gone.rowCount) {
+      return null;
+    }
+    await this.sweepAssets(worn.rows.map((r) => r.hash));
+    return gone.rows[0];
+  }
+
+  /* Drop any of `hashes` that no map wears any more. A failure here means
+   * another map took the image up in the same moment, which is the image
+   * being worn, so it is kept and nothing is said. */
+  async sweepAssets(hashes) {
+    if (!hashes.length) {
+      return;
+    }
+    try {
+      await this.pool.query(
+        `DELETE FROM assets a
+         WHERE a.hash = ANY($1)
+           AND NOT EXISTS (SELECT 1 FROM map_assets m WHERE m.hash = a.hash)`,
+        [hashes],
+      );
+    } catch (e) {
+      /* Kept. See above. */
+    }
+  }
+
   async listRuns({ map } = {}) {
     const found = await this.pool.query(
       `SELECT * FROM runs
@@ -1604,6 +1957,22 @@ export function rowToSummary(row) {
      * animation, which is what the publish path's own SELECT wants. */
     hasGif: Boolean(row.has_gif),
     gifUtc: row.gif_utc || null,
+  };
+}
+
+/* The Postgres twin of mapSummaryOf. One contract, two writers, and the
+ * self test holds their keys to one set. */
+export function mapRowToSummary(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    author: row.author,
+    pieces: row.pieces,
+    gaps: row.gaps,
+    hasLogo: Boolean(row.has_logo),
+    plan: row.plan || null,
+    publishedUtc: row.published_utc,
+    updatedUtc: row.updated_utc,
   };
 }
 
