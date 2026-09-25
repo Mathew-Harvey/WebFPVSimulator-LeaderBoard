@@ -154,6 +154,16 @@ const NOT_YOURS = {
   status: 403,
 };
 
+/* The same refusal for a share card, of a track and of a map. */
+const CARD_NOT_YOURS = {
+  error: 'That track was published from another browser, so this one cannot change its share card.',
+  status: 403,
+};
+const MAP_CARD_NOT_YOURS = {
+  error: 'That map was published from another browser, so this one cannot change its share card.',
+  status: 403,
+};
+
 /* One 409, so the three publish paths cannot word it three ways. */
 const CONFLICT = {
   error: 'This track is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
@@ -204,6 +214,10 @@ export function mapSummaryOf(map) {
     plan: map.plan || null,
     publishedUtc: map.publishedUtc,
     updatedUtc: map.updatedUtc,
+    /* The share card, as a flag and a stamp and never as bytes, for the
+     * reason summaryOf gives about the animation. */
+    hasCard: Boolean(map.card),
+    cardUtc: map.cardUtc || null,
   };
 }
 
@@ -244,6 +258,12 @@ export function summaryOf(track, times) {
      * is not served from yesterday's cache. */
     hasGif: Boolean(track.gif),
     gifUtc: track.gifUtc || null,
+    /* The share card, on the animation's terms: whether there is one and
+     * when it was drawn. The stamp goes into the card's address wherever a
+     * page names it, so a crawler holding last month's picture is handed a
+     * new URL rather than trusted to notice. */
+    hasCard: Boolean(track.card),
+    cardUtc: track.cardUtc || null,
   };
 }
 
@@ -550,6 +570,15 @@ class FileStore {
      * like and re-rendering it would cost the publisher a minute for a file
      * identical to the one already here. */
     const keepGif = existing && existing.layoutHash === inspected.layoutHash;
+    /* THE SHARE CARD FOLLOWS THE SAME RULE, and for one more reason than
+     * the animation has. It is a picture of a layout too; and the simulator
+     * republishes every track a pilot owns, in the background, whenever
+     * they change their name (syncOwnedIdentity in its src/share/listing.js),
+     * with no renderer anywhere near. A card cleared by every republish
+     * would be a pilot's whole shelf of cards gone for a new handle. The
+     * card carries no name for exactly this reason: the name is in the
+     * link's text, which is written fresh from this row every time. */
+    const keepCard = keepGif;
     this.data.tracks[inspected.id] = {
       id: inspected.id,
       name: inspected.name,
@@ -564,6 +593,8 @@ class FileStore {
       tags: wearing,
       gif: keepGif ? (existing.gif || null) : null,
       gifUtc: keepGif ? (existing.gifUtc || null) : null,
+      card: keepCard ? (existing.card || null) : null,
+      cardUtc: keepCard ? (existing.cardUtc || null) : null,
       publishedUtc,
       updatedUtc: nowIso(),
     };
@@ -617,6 +648,32 @@ class FileStore {
       return null;
     }
     return { bytes: Buffer.from(track.gif, 'base64'), gifUtc: track.gifUtc || null };
+  }
+
+  /* The share card, on setGif's terms exactly: base64 here, the key checked
+   * here, admin the one way past. */
+  async setCard({ id, bytes, editKey = '', admin = false }) {
+    return this.lock(async () => {
+      const track = this.data.tracks[id];
+      if (!track) {
+        return null;
+      }
+      if (!admin && (!editKey || hashEditKey(editKey) !== track.editKeyHash)) {
+        return { ...CARD_NOT_YOURS };
+      }
+      track.card = Buffer.from(bytes).toString('base64');
+      track.cardUtc = nowIso();
+      await this.flush();
+      return { id, cardUtc: track.cardUtc };
+    });
+  }
+
+  async getCard(id) {
+    const track = this.data.tracks[id];
+    if (!track || !track.card) {
+      return null;
+    }
+    return { bytes: Buffer.from(track.card, 'base64'), cardUtc: track.cardUtc || null };
   }
 
   /*
@@ -736,6 +793,31 @@ class FileStore {
     return this.assetOf(hash);
   }
 
+  /* A map's share card, on the track's terms, opened by the map's own key. */
+  async setMapCard({ id, bytes, editKey = '', admin = false }) {
+    return this.lock(async () => {
+      const map = this.data.maps[id];
+      if (!map) {
+        return null;
+      }
+      if (!admin && (!editKey || hashEditKey(editKey) !== map.editKeyHash)) {
+        return { ...MAP_CARD_NOT_YOURS };
+      }
+      map.card = Buffer.from(bytes).toString('base64');
+      map.cardUtc = nowIso();
+      await this.flush();
+      return { id, cardUtc: map.cardUtc };
+    });
+  }
+
+  async getMapCard(id) {
+    const map = this.data.maps[id];
+    if (!map || !map.card) {
+      return null;
+    }
+    return { bytes: Buffer.from(map.card, 'base64'), cardUtc: map.cardUtc || null };
+  }
+
   async publishMap({ inspected, plan, author, editKey }) {
     return this.lock(() => this.publishMapUnlocked({ inspected, plan, author, editKey }));
   }
@@ -781,6 +863,14 @@ class FileStore {
       pieces: inspected.pieces,
       gaps: inspected.gaps,
       hasLogo: inspected.hasLogo,
+      /* A MAP'S SHARE CARD GOES WITH EVERY REPUBLISH, where a track's
+       * survives a rename. A map has no layout hash to say what changed,
+       * and it needs none: nothing republishes a map but the builder's own
+       * Publish, which draws the new card seconds later. A track is
+       * republished in the background on a pilot's rename, which is why its
+       * rule is the other one. If that ever reaches maps, this is the line. */
+      card: null,
+      cardUtc: null,
       publishedUtc: existing ? existing.publishedUtc : nowIso(),
       updatedUtc: nowIso(),
     };
@@ -1122,8 +1212,8 @@ class PgStore {
      * plus the flag that stands in for the bytes. */
     const tracks = await this.pool.query(`
       SELECT id, name, author, document, plan, has_logo, gates, elements, tags,
-             published_utc, updated_utc, gif_utc,
-             (gif IS NOT NULL) AS has_gif
+             published_utc, updated_utc, gif_utc, card_utc,
+             (gif IS NOT NULL) AS has_gif, (card IS NOT NULL) AS has_card
       FROM tracks ORDER BY updated_utc DESC
     `);
     const bests = await this.pool.query(`
@@ -1144,8 +1234,8 @@ class PgStore {
   async getTrack(id) {
     const found = await this.pool.query(`
       SELECT id, name, author, document, plan, has_logo, gates, elements, tags,
-             published_utc, updated_utc, gif_utc,
-             (gif IS NOT NULL) AS has_gif
+             published_utc, updated_utc, gif_utc, card_utc,
+             (gif IS NOT NULL) AS has_gif, (card IS NOT NULL) AS has_card
       FROM tracks WHERE id = $1
     `, [id]);
     if (!found.rowCount) {
@@ -1209,9 +1299,13 @@ class PgStore {
          * away for the same reason it throws the times away: it is a
          * picture of a track nobody can fly any more. A rename or a retag
          * keeps it, because neither changes what the lap looks like. The
-         * file store's publishUnlocked carries the same rule. */
+         * file store's publishUnlocked carries the same rule, and says why
+         * the share card has to keep to it as well. */
         if (timesCleared) {
-          await client.query('UPDATE tracks SET gif = NULL, gif_utc = NULL WHERE id = $1', [inspected.id]);
+          await client.query(
+            'UPDATE tracks SET gif = NULL, gif_utc = NULL, card = NULL, card_utc = NULL WHERE id = $1',
+            [inspected.id],
+          );
         }
         await client.query(
           `UPDATE tracks SET
@@ -1288,6 +1382,30 @@ class PgStore {
       return null;
     }
     return { bytes: found.rows[0].gif, gifUtc: found.rows[0].gif_utc || null };
+  }
+
+  /* The share card, setGif's twin. */
+  async setCard({ id, bytes, editKey = '', admin = false }) {
+    const found = await this.pool.query('SELECT edit_key_hash FROM tracks WHERE id = $1', [id]);
+    if (!found.rowCount) {
+      return null;
+    }
+    if (!admin && (!editKey || hashEditKey(editKey) !== found.rows[0].edit_key_hash)) {
+      return { ...CARD_NOT_YOURS };
+    }
+    const done = await this.pool.query(
+      'UPDATE tracks SET card = $2, card_utc = NOW() WHERE id = $1 RETURNING card_utc',
+      [id, Buffer.from(bytes)],
+    );
+    return done.rowCount ? { id, cardUtc: done.rows[0].card_utc } : null;
+  }
+
+  async getCard(id) {
+    const found = await this.pool.query('SELECT card, card_utc FROM tracks WHERE id = $1', [id]);
+    if (!found.rowCount || !found.rows[0].card) {
+      return null;
+    }
+    return { bytes: found.rows[0].card, cardUtc: found.rows[0].card_utc || null };
   }
 
   /*
@@ -1416,7 +1534,8 @@ class PgStore {
    * the simulator that flies them. */
   async listMaps() {
     const found = await this.pool.query(`
-      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc
+      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc,
+             card_utc, (card IS NOT NULL) AS has_card
       FROM maps ORDER BY updated_utc DESC
     `);
     return found.rows.map(mapRowToSummary);
@@ -1424,7 +1543,8 @@ class PgStore {
 
   async getMap(id) {
     const found = await this.pool.query(`
-      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc
+      SELECT id, name, author, plan, pieces, gaps, has_logo, published_utc, updated_utc,
+             card_utc, (card IS NOT NULL) AS has_card
       FROM maps WHERE id = $1
     `, [id]);
     return found.rowCount ? mapRowToSummary(found.rows[0]) : null;
@@ -1455,6 +1575,30 @@ class PgStore {
   async getAsset(hash) {
     const found = await this.pool.query('SELECT mime, bytes FROM assets WHERE hash = $1', [hash]);
     return found.rowCount ? { mime: found.rows[0].mime, bytes: found.rows[0].bytes } : null;
+  }
+
+  /* A map's share card: the file store's setMapCard, on setCard's terms. */
+  async setMapCard({ id, bytes, editKey = '', admin = false }) {
+    const found = await this.pool.query('SELECT edit_key_hash FROM maps WHERE id = $1', [id]);
+    if (!found.rowCount) {
+      return null;
+    }
+    if (!admin && (!editKey || hashEditKey(editKey) !== found.rows[0].edit_key_hash)) {
+      return { ...MAP_CARD_NOT_YOURS };
+    }
+    const done = await this.pool.query(
+      'UPDATE maps SET card = $2, card_utc = NOW() WHERE id = $1 RETURNING card_utc',
+      [id, Buffer.from(bytes)],
+    );
+    return done.rowCount ? { id, cardUtc: done.rows[0].card_utc } : null;
+  }
+
+  async getMapCard(id) {
+    const found = await this.pool.query('SELECT card, card_utc FROM maps WHERE id = $1', [id]);
+    if (!found.rowCount || !found.rows[0].card) {
+      return null;
+    }
+    return { bytes: found.rows[0].card, cardUtc: found.rows[0].card_utc || null };
   }
 
   /*
@@ -1513,7 +1657,7 @@ class PgStore {
         await client.query(
           `UPDATE maps SET
             name = $2, author = $3, document = $4, plan = $5, pieces = $6, gaps = $7,
-            has_logo = $8, updated_utc = NOW()
+            has_logo = $8, card = NULL, card_utc = NULL, updated_utc = NOW()
            WHERE id = $1`,
           [
             inspected.id, inspected.name, author, inspected.document, plan,
@@ -1986,6 +2130,10 @@ export function rowToSummary(row) {
      * animation, which is what the publish path's own SELECT wants. */
     hasGif: Boolean(row.has_gif),
     gifUtc: row.gif_utc || null,
+    /* The share card on the same terms, and read as none the same way when
+     * a SELECT leaves its two columns out. */
+    hasCard: Boolean(row.has_card),
+    cardUtc: row.card_utc || null,
   };
 }
 
@@ -2002,6 +2150,8 @@ export function mapRowToSummary(row) {
     plan: row.plan || null,
     publishedUtc: row.published_utc,
     updatedUtc: row.updated_utc,
+    hasCard: Boolean(row.has_card),
+    cardUtc: row.card_utc || null,
   };
 }
 

@@ -290,3 +290,28 @@ CREATE TABLE IF NOT EXISTS map_assets (
 -- The primary key leads on map_id; "does anything still wear this image"
 -- asks by hash.
 CREATE INDEX IF NOT EXISTS map_assets_hash ON map_assets (hash);
+
+-- ------------------------------------------------------------------
+-- The share card: what a link to a track or a map shows when it is posted.
+-- ------------------------------------------------------------------
+--
+-- One 1200 by 630 JPEG per track and per map: the thing itself, in the
+-- simulator's own renderer, with the WebFPV wordmark over it. Facebook, X,
+-- WhatsApp, Discord, Slack and iMessage all read a link's og:image and none
+-- of them runs a line of script to find one, so the picture has to exist
+-- before anybody shares the link. The browser that publishes draws it, in
+-- src/share/card.js in the simulator, and uploads it here seconds later,
+-- the way a room's card animation arrives. The board still renders nothing:
+-- this is storage, exactly as `gif` is.
+--
+-- A column rather than a table for the reason `gif` is one: the picture
+-- belongs to one row and goes when the row goes. Null is no card, which is
+-- every row until one is uploaded, and a link to it then shows the site's
+-- own card. inspectCard in src/validate.js holds the size and the format.
+--
+-- Additive: an existing database gains these the next time the process
+-- starts, and nothing already stored is rewritten.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS card BYTEA;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS card_utc TIMESTAMPTZ;
+ALTER TABLE maps ADD COLUMN IF NOT EXISTS card BYTEA;
+ALTER TABLE maps ADD COLUMN IF NOT EXISTS card_utc TIMESTAMPTZ;

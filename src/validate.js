@@ -437,6 +437,126 @@ export function inspectGif({ base64, document }) {
   return { bytes, width: head.width, height: head.height };
 }
 
+/* ------------------------------------------------------------------ */
+/* The share card                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * THE PICTURE A LINK SHOWS WHEN IT IS POSTED, WHICH THIS BOARD STORES AND
+ * DOES NOT MAKE.
+ *
+ * One JPEG per track and per map, drawn by the simulator's own
+ * src/share/card.js: a frame of the thing in the real renderer with the
+ * WebFPV wordmark over it. Like the animation above, what happens here is a
+ * stranger's upload being bounded, not a picture being made.
+ *
+ * EXACTLY 1200 BY 630, and that is not fussiness. It is the 1.91 to 1 every
+ * platform crops to, and it is what the page's og:image:width and height say
+ * before the crawler has fetched a byte. Facebook lays out a first share
+ * from those two tags alone, so a card of any other size would be drawn to
+ * the wrong box by the one reader that trusts them.
+ *
+ * 400 kB AT MOST. The simulator aims under 300 kB, because WhatsApp is known
+ * to drop a preview picture larger than that, and a render of a busy
+ * town at the quality it starts from lands between 120 and 250 kB. The cap
+ * is the aim plus room for a browser whose encoder is less thrifty, and it
+ * is far under anything a crawler would refuse.
+ *
+ * JPEG only. A photograph of a world is what JPEG is for, and one format is
+ * one type header on the way out and one magic number on the way in.
+ */
+export const CARD_WIDTH = 1200;
+export const CARD_HEIGHT = 630;
+const MAX_CARD_BYTES = 400_000;
+export const MAX_CARD_BASE64_CHARS = Math.ceil(MAX_CARD_BYTES / 3) * 4;
+
+/*
+ * The frame size out of a JPEG, or null for anything that is not one.
+ *
+ * A JPEG is a run of marker segments, each FF, a marker byte and a two byte
+ * length, and the frame header (a SOF marker: C0 to CF less C4, C8 and CC,
+ * which are other things) carries the height and then the width. Walking
+ * the lengths to reach it is a dozen hops on a canvas's output. Reaching the
+ * start of scan first means there is no frame header, which a decoder would
+ * refuse too.
+ *
+ * The file must also END as a JPEG, FF D9. A browser draws a truncated one
+ * as far as it got and greys the rest, so an upload cut short in transit
+ * would otherwise be stored as a card with its bottom missing.
+ */
+function readJpegSize(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    return null;
+  }
+  if (bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) {
+    return null;
+  }
+  let i = 2;
+  while (i + 4 <= bytes.length) {
+    if (bytes[i] !== 0xff) {
+      return null;
+    }
+    const marker = bytes[i + 1];
+    if (marker === 0xff) {
+      /* Fill: any number of FF may pad the gap before a marker. */
+      i += 1;
+      continue;
+    }
+    if (marker === 0xd9 || marker === 0xda) {
+      return null;
+    }
+    if ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+      /* The markers that carry no length. */
+      i += 2;
+      continue;
+    }
+    const length = (bytes[i + 2] << 8) | bytes[i + 3];
+    if (length < 2) {
+      return null;
+    }
+    const frame = marker >= 0xc0 && marker <= 0xcf
+      && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (frame) {
+      if (i + 9 > bytes.length) {
+        return null;
+      }
+      return {
+        height: (bytes[i + 5] << 8) | bytes[i + 6],
+        width: (bytes[i + 7] << 8) | bytes[i + 8],
+      };
+    }
+    i += 2 + length;
+  }
+  return null;
+}
+
+/*
+ * The upload. Nothing about it depends on what it is a card of: a track and
+ * a map are held to the same size, format and weight, because they end up
+ * in the same box on the same platforms.
+ */
+export function inspectCard({ base64 }) {
+  const packed = String(base64 || '').replace(/^data:image\/jpeg;base64,/, '').trim();
+  if (!packed) {
+    return { error: 'That upload carried no picture.' };
+  }
+  if (packed.length > MAX_CARD_BASE64_CHARS) {
+    return { error: 'That share card is too large for this board.' };
+  }
+  if (!GIF_BASE64_RE.test(packed)) {
+    return { error: 'That share card is not base64.' };
+  }
+  const bytes = Buffer.from(packed, 'base64');
+  const size = readJpegSize(bytes);
+  if (!size) {
+    return { error: 'That upload is not a JPEG.' };
+  }
+  if (size.width !== CARD_WIDTH || size.height !== CARD_HEIGHT) {
+    return { error: `A share card is ${CARD_WIDTH} by ${CARD_HEIGHT}, and that one is ${size.width} by ${size.height}.` };
+  }
+  return { bytes, width: size.width, height: size.height };
+}
+
 export function planFromDocument(document) {
   const field = isObject(document.field) ? document.field : {};
   const byId = new Map();
