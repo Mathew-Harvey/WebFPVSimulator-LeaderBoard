@@ -59,14 +59,36 @@ const PATREON_URL = 'https://www.patreon.com/c/webfpv';
 
 const PATREON_NOTE = 'Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.';
 
+/*
+ * HOW A LINK THAT LEAVES THE PRODUCT OPENS: in a tab of its own, with no
+ * window.opener and no Referer.
+ *
+ * That is the opposite of what a link to the simulator does, and it is
+ * written down once, under a name, so the difference can be seen and
+ * checked instead of being two strings that look like any other link's.
+ * A simulator link names SIM_WINDOW and carries no noopener, for the
+ * reasons above SIM_WINDOW further down. Patreon must not take that name,
+ * because a click would send the visitor's simulator tab, and whatever
+ * was flying in it, to Patreon. It keeps its noopener, so that somebody
+ * else's page is never handed a window.opener pointing back at this one.
+ *
+ * src/selftest.js scans the code of this whole file for _blank, noopener
+ * and noreferrer, and this line, matched by its exact text, is the one
+ * place it lets them through. It also counts who uses the name, so a
+ * simulator link that borrowed it fails the suite instead of opening a
+ * fresh simulator on every click. A second link that really does leave
+ * the product uses this too, and moves that count, with its reason.
+ */
+const OUTSIDE_PRODUCT_LINK = { target: '_blank', rel: 'noopener noreferrer' };
+
 function bindPatreonLinks() {
   for (const a of document.querySelectorAll('[data-patreon]')) {
     a.title = PATREON_NOTE;
     a.setAttribute('aria-label', PATREON_NOTE);
     if (PATREON_URL) {
       a.href = PATREON_URL;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
+      a.target = OUTSIDE_PRODUCT_LINK.target;
+      a.rel = OUTSIDE_PRODUCT_LINK.rel;
       delete a.dataset.patreonPending;
       continue;
     }
@@ -300,7 +322,8 @@ function reduceMotion() {
  *   for noopener opens a new tab every single time, which is the bug being
  *   fixed here. The cost is that the simulator gets a cross origin
  *   window.opener pointing back at this page. It is our own site at the
- *   other end. A link that leaves the product keeps its noopener.
+ *   other end. A link that leaves the product keeps its noopener, and
+ *   takes it from OUTSIDE_PRODUCT_LINK near the top of this file.
  *
  *   The names have to match src/share/windows.js in the simulator, which is
  *   the copy of record and carries the long version of this comment. This

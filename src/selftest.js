@@ -1131,8 +1131,67 @@ async function testHttp() {
     check('the links app.js builds name the simulator tab',
       app.includes("const SIM_WINDOW = 'webfpv-sim'")
       && (app.match(/\.target = SIM_WINDOW/g) || []).length === 10);
+    /*
+     * ONE LINK ON THE PAGE LEAVES THE PRODUCT, AND WHY IT IS ALLOWED TO.
+     *
+     * This check used to look for '_blank' and noopener' anywhere in
+     * app.js, with no allowance, and it failed from the day the Patreon
+     * link arrived. The link was right and the check was too blunt.
+     * Patreon is outside the product, so it opens a tab of its own and
+     * keeps its noopener, which is exactly what a simulator link must
+     * never do. Given the webfpv-sim name instead, a click would send the
+     * visitor's running simulator to Patreon.
+     *
+     * So app.js says it once, in OUTSIDE_PRODUCT_LINK, and the scan below
+     * excludes that one line by its exact text and nothing else. Why that
+     * cannot hide the bug this check exists for:
+     *
+     *   Every other line of app.js is still scanned. A simulator link that
+     *   writes _blank or noopener itself fails exactly as it did before.
+     *
+     *   The line is matched whole and must appear exactly once, so it
+     *   cannot quietly take on a second job, and changing it means
+     *   changing this file, which is where the reason lives.
+     *
+     *   Its uses are counted, and both must sit in bindPatreonLinks, whose
+     *   href is PATREON_URL. A simulator link that borrowed the constant
+     *   instead of the strings moves the count and fails. A second link
+     *   that really does leave the product moves it too, on purpose: the
+     *   number changes with its reason written here, the way the count of
+     *   named targets above does.
+     *
+     *   That count of named targets is untouched by any of this.
+     *
+     * The scan was tightened at the same time, because the old one could
+     * not see the spelling the Patreon link brought with it. noopener'
+     * matched rel = 'noopener' and not rel = 'noopener noreferrer', so a
+     * Fly link that picked up the Patreon link's rel beside its SIM_WINDOW
+     * target left the count of named targets alone, said no '_blank', and
+     * passed, while opening a fresh simulator on every click. Comments
+     * come out first now, because the comments in app.js have to be free
+     * to say "_blank" to explain why the code must not, and then the words
+     * are looked for in any quoting and any case. noreferrer is one of
+     * them because the spec makes it imply noopener, so it breaks a named
+     * target just as quietly. A comment is recognised only where it opens
+     * a line, which is the only place app.js starts one, so a '/*' inside
+     * a string cannot be taken for a comment and hide the code after it.
+     * The cost falls the loud way: a comment that follows code on the same
+     * line is read as code, and if it says one of the words this check
+     * fails until the comment moves onto a line of its own, like every
+     * other one in app.js.
+     */
+    const outsideLine = "const OUTSIDE_PRODUCT_LINK = { target: '_blank', rel: 'noopener noreferrer' };";
+    const appCode = app.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '');
+    const scanned = appCode.replace(outsideLine, '');
+    const patreonAt = appCode.indexOf('function bindPatreonLinks(');
+    const patreonFn = patreonAt === -1 ? '' : appCode.slice(patreonAt, appCode.indexOf('\n}\n', patreonAt));
+    const outsideUses = (text) => (text.match(/\bOUTSIDE_PRODUCT_LINK\b/g) || []).length;
+    check('the one way out of the product is a single line, declared once',
+      appCode.split(outsideLine).length === 2);
+    check('and only the Patreon links open that way',
+      outsideUses(scanned) === 2 && outsideUses(patreonFn) === 2);
     check('nothing app.js builds opens a bare new tab or asks for noopener',
-      !app.includes("'_blank'") && !app.includes("noopener'"));
+      !/_blank|noopener|noreferrer/i.test(scanned));
     const sneak = await fetch('http://127.0.0.1:3199/%2e%2e/package.json');
     const sneakText = await sneak.text();
     check('encoded parent path cannot read the package', sneak.status !== 200 && !sneakText.includes('webfpvleaderboard'));
