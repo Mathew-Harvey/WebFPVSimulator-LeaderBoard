@@ -206,6 +206,10 @@ CREATE TABLE IF NOT EXISTS stats_days (
 -- sponsor list in src/sponsors.js, so this table cannot be grown by a
 -- stranger inventing values: an unknown source folds into 'other' and an
 -- unknown country into 'ZZ' before anything is written.
+--
+-- Referrer and ref are added as new dimensions: (day, 'referrer',
+-- 'reddit.com'), (day, 'ref', 'hn'). Both are optional on a visit event,
+-- and null values are not stored (no row for null = no count).
 CREATE TABLE IF NOT EXISTS stats_dims (
   day DATE NOT NULL,
   dim TEXT NOT NULL,

@@ -1109,7 +1109,7 @@ async function testHttp() {
      * looks correct while doing it. Both halves are asserted, on the
      * fallback anchors in the page and on the links app.js builds.
      */
-    const simAnchors = html.match(/<a\b[^>]*href="http:\/\/127\.0\.0\.1:8000[^"]*"[^>]*>/g) || [];
+    const simAnchors = html.match(/<a\b[^>]*href="https:\/\/webfpv\.org\/sim[^"]*"[^>]*>/g) || [];
     check('every fallback link to the simulator names the simulator tab',
       simAnchors.length === 7 && simAnchors.every((a) => a.includes('target="webfpv-sim"')));
     /* Ten: the card's Fly, the sheet's Fly and Remix, the header and
@@ -2087,6 +2087,21 @@ async function testStats() {
   check('a visit is accepted', !ok({
     v: 1, kind: 'visit', surface: 'sim', returning: false,
   }).error);
+  check('a visit with referrer is accepted', !ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com',
+  }).error);
+  check('a visit with ref tag is accepted', !ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'hn',
+  }).error);
+  check('a visit with both referrer and ref is accepted', !ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'news.ycombinator.com', ref: 'hn',
+  }).error);
+  check('referrer is trimmed and lowercased', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: '  Reddit.COM  ',
+  }).event.referrer === 'reddit.com');
+  check('ref is trimmed and sanitised', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: '  HN!@#  ',
+  }).event.ref === 'hn');
   check('a session is accepted', !ok({
     v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad',
   }).error);
@@ -2141,13 +2156,15 @@ async function testStats() {
     kind: 'visit',
     surface: 'sim',
     returning: true,
+    referrer: 'reddit.com',
+    ref: 'hn',
     ip: '203.0.113.7',
     ua: 'Mozilla/5.0',
     pilot: 'Ada Rook',
-    referrer: 'https://example.com/',
+    trackId: 'trk-12345678',
   }).event;
   check('nothing but the counted fields comes out of a visit',
-    Object.keys(smuggled).sort().join(',') === 'kind,returning,source,surface');
+    Object.keys(smuggled).sort().join(',') === 'kind,ref,referrer,returning,source,surface');
   const flushed = ok({
     v: 1, kind: 'flush', tab: 'aaaa1111', craft: '5inch', laps: 1, name: 'Ada Rook',
   }).event;

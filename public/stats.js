@@ -196,6 +196,93 @@ export function heldSource() {
 }
 
 /*
+ * EXTRACT THE REFERRER DOMAIN, stripping the protocol and path.
+ *
+ * Referrer is captured at visit time only, never stored, and only the domain
+ * is sent. A full URL would be personal data; a domain is attribution. Same
+ * origin referrers are folded to null: somebody navigating within webfpv.org
+ * is not an external referrer.
+ */
+export function referrerDomain(doc = document, loc = window.location) {
+  try {
+    const ref = String(doc.referrer || '').trim();
+    if (!ref) {
+      return null;
+    }
+    const refUrl = new URL(ref);
+    const currentHost = loc.hostname;
+    if (refUrl.hostname === currentHost) {
+      return null;
+    }
+    return refUrl.hostname;
+  } catch (e) {
+    return null;
+  }
+}
+
+/*
+ * NORMALISE A ?ref= TAG TO A SHORT SLUG.
+ *
+ * Maps common referrer sources to short tags (reddit, yt, discord, etc).
+ * Unknown values are sanitised and length-limited. This is separate from
+ * utm_source (sponsor slugs) and is meant for organic/manual attribution.
+ */
+export function normaliseRefTag(raw) {
+  if (raw == null || raw === '') {
+    return null;
+  }
+  const clean = String(raw).trim().toLowerCase();
+  if (!clean) {
+    return null;
+  }
+  /* Map common variants to canonical short tags. */
+  const known = {
+    reddit: 'reddit',
+    r: 'reddit',
+    youtube: 'yt',
+    yt: 'yt',
+    discord: 'discord',
+    twitter: 'x',
+    x: 'x',
+    facebook: 'facebook',
+    fb: 'facebook',
+    instagram: 'instagram',
+    ig: 'instagram',
+    hn: 'hn',
+    hackernews: 'hn',
+    github: 'github',
+    gh: 'github',
+  };
+  if (known[clean]) {
+    return known[clean];
+  }
+  /* For unknown values, sanitise to alphanumeric and hyphens, limit length. */
+  const sanitised = clean.replace(/[^a-z0-9-]/g, '').slice(0, 16);
+  return sanitised || null;
+}
+
+/*
+ * CAPTURE ?ref= PARAMETER and return its normalised form.
+ *
+ * This is read from the query string on every visit and sent with that
+ * visit's event. Unlike utm_source, it is NOT stored in localStorage and
+ * does not persist across visits, because it is meant for per-link
+ * attribution rather than per-poster campaigns.
+ *
+ * The parameter is NOT stripped from the URL: it is lightweight enough to
+ * leave in place, and removing it would interfere with utm_ stripping.
+ */
+export function captureRefTag(loc = window.location) {
+  try {
+    const url = new URL(loc.href);
+    const raw = url.searchParams.get('ref');
+    return normaliseRefTag(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+/*
  * Mark this browser as counted today, and say whether it had been here
  * before. Returns null when it has already been counted today, which is
  * what makes a visit once per browser per day across all three pages.
@@ -254,7 +341,15 @@ export function pingVisit(surface, url) {
   if (!visit) {
     return false;
   }
-  return sendEvent({ kind: 'visit', surface, returning: visit.returning }, url);
+  const referrer = referrerDomain();
+  const ref = captureRefTag();
+  return sendEvent({
+    kind: 'visit',
+    surface,
+    returning: visit.returning,
+    referrer,
+    ref,
+  }, url);
 }
 
 /* ------------------------------------------------------------------ */

@@ -407,6 +407,8 @@ export function shapeStats({
     allTime: { ...allTime, countries: countriesAllTime },
     countries,
     sources: of('source'),
+    referrers: of('referrer'),
+    refs: of('ref'),
     craft: of('craft'),
     maps: of('map'),
     inputs: of('input'),
@@ -990,6 +992,12 @@ class FileStore {
       bump('surface', event.surface, 'visits', 1);
       bump('country', country, 'visits', 1);
       bump('source', event.source, 'visits', 1);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 'visits', 1);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 'visits', 1);
+      }
     } else if (event.kind === 'session') {
       row.sessions += 1;
       bump('craft', event.craft, 'sessions', 1);
@@ -1797,6 +1805,12 @@ class PgStore {
       bump('surface', event.surface, 1, 0, 0);
       bump('country', country, 1, 0, 0);
       bump('source', event.source, 1, 0, 0);
+      if (event.referrer) {
+        bump('referrer', event.referrer, 1, 0, 0);
+      }
+      if (event.ref) {
+        bump('ref', event.ref, 1, 0, 0);
+      }
     } else if (event.kind === 'session') {
       sessions = 1;
       bump('craft', event.craft, 0, 1, 0);

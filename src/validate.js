@@ -1509,7 +1509,24 @@ export function inspectStatsEvent(body, sourceKey) {
     if (typeof body.returning !== 'boolean') {
       return { error: 'A visit says whether this browser has been here before.' };
     }
-    return { event: { kind, surface, returning: body.returning, source } };
+    /* Referrer domain: optional, domain only (no protocol or path), capped. */
+    const referrer = body.referrer != null
+      ? String(body.referrer).trim().toLowerCase().slice(0, 100) || null
+      : null;
+    /* Ref tag: optional, short slug from ?ref= parameter, normalised. */
+    const ref = body.ref != null
+      ? String(body.ref).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16) || null
+      : null;
+    return {
+      event: {
+        kind,
+        surface,
+        returning: body.returning,
+        source,
+        referrer,
+        ref,
+      },
+    };
   }
   if (kind === 'session') {
     const craft = String(body.craft ?? '');
