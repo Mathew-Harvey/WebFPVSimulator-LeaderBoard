@@ -2465,13 +2465,13 @@ async function testStats() {
     check('support clicks from landing are counted', withSupport.support && withSupport.support.landing === 1);
 
     /* A support-only day does not create a day row or move firstDay. */
-    const supportOnlyDay = '2026-09-25';
+    const supportOnlyDay = '2026-09-10';
     await store.recordStats({
       kind: 'support_click', source: 'sim',
     }, { day: supportOnlyDay, country: 'AU' });
     const afterSupportOnly = await store.readStats({ days: 30, now });
     check('a support-only day does not move firstDay', afterSupportOnly.firstDay === before);
-    check('and does not create a stats_days row', !afterSupportOnly.days.some((d) => d.day === supportOnlyDay));
+    check('and does not create a stats_days row', store.data.stats.days[supportOnlyDay] === undefined);
 
     /* The board's own tables, which are not counters and never were. */
     await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });
