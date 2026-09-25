@@ -974,8 +974,13 @@ class FileStore {
       this.data.stats = { days: {}, dims: {} };
     }
     const { days, dims } = this.data.stats;
-    if (!days[day]) {
-      days[day] = emptyStatsDay(day);
+    /* Support clicks write only a dimension row and do not create a day
+     * row, so a support-only day holds no stats_days entry and does not
+     * move firstDay. */
+    if (event.kind !== 'support_click') {
+      if (!days[day]) {
+        days[day] = emptyStatsDay(day);
+      }
     }
     const row = days[day];
     const bump = (dim, key, field, n) => {
@@ -985,6 +990,7 @@ class FileStore {
           day, dim, key, visits: 0, sessions: 0, laps: 0,
         };
       }
+      /* Support clicks reuse the visits column to hold their count. */
       dims[at][field] += n;
     };
 
@@ -1868,21 +1874,27 @@ class PgStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        `INSERT INTO stats_days (
-           day, visits, new_visitors, returning_visitors, sessions, laps, flight_s, crashes
-         ) VALUES ($1::date,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (day) DO UPDATE SET
-           visits = stats_days.visits + EXCLUDED.visits,
-           new_visitors = stats_days.new_visitors + EXCLUDED.new_visitors,
-           returning_visitors = stats_days.returning_visitors + EXCLUDED.returning_visitors,
-           sessions = stats_days.sessions + EXCLUDED.sessions,
-           laps = stats_days.laps + EXCLUDED.laps,
-           flight_s = stats_days.flight_s + EXCLUDED.flight_s,
-           crashes = stats_days.crashes + EXCLUDED.crashes`,
-        [day, visits, newVisitors, returningVisitors, sessions, laps, flightS, crashes],
-      );
+      /* Support clicks write only a dimension row and do not touch
+       * stats_days, so a support-only day holds no stats_days entry and does
+       * not move firstDay. */
+      if (event.kind !== 'support_click') {
+        await client.query(
+          `INSERT INTO stats_days (
+             day, visits, new_visitors, returning_visitors, sessions, laps, flight_s, crashes
+           ) VALUES ($1::date,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (day) DO UPDATE SET
+             visits = stats_days.visits + EXCLUDED.visits,
+             new_visitors = stats_days.new_visitors + EXCLUDED.new_visitors,
+             returning_visitors = stats_days.returning_visitors + EXCLUDED.returning_visitors,
+             sessions = stats_days.sessions + EXCLUDED.sessions,
+             laps = stats_days.laps + EXCLUDED.laps,
+             flight_s = stats_days.flight_s + EXCLUDED.flight_s,
+             crashes = stats_days.crashes + EXCLUDED.crashes`,
+          [day, visits, newVisitors, returningVisitors, sessions, laps, flightS, crashes],
+        );
+      }
       for (const [dim, key, v, s, l] of dims) {
+        /* Support clicks reuse the visits column to hold their count. */
         await client.query(
           `INSERT INTO stats_dims (day, dim, key, visits, sessions, laps)
            VALUES ($1::date,$2,$3,$4,$5,$6)

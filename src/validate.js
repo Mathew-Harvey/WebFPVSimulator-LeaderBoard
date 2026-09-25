@@ -1678,7 +1678,7 @@ export function inspectStatsEvent(body, sourceKey) {
     };
   }
   if (kind === 'support_click') {
-    const clickSource = String(body.source ?? '');
+    const clickSource = typeof body.source === 'string' ? body.source : '';
     if (!SUPPORT_SOURCES.includes(clickSource)) {
       return { error: 'That support click source must be sim or landing.' };
     }
