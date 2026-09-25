@@ -2102,6 +2102,79 @@ async function testStats() {
   check('ref is trimmed and sanitised', ok({
     v: 1, kind: 'visit', surface: 'sim', returning: false, ref: '  HN!@#  ',
   }).event.ref === 'hn');
+
+  /* Hostile input tests: referrer */
+  check('full URL referrer is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'https://reddit.com/r/fpv',
+  }).event.referrer === null);
+  check('referrer with path is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com/r/fpv',
+  }).event.referrer === null);
+  check('referrer with query string is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com?foo=bar',
+  }).event.referrer === null);
+  check('referrer with port is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com:8080',
+  }).event.referrer === null);
+  check('referrer with userinfo is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'user:pass@reddit.com',
+  }).event.referrer === null);
+  check('script tag in referrer is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: '<script>alert(1)</script>',
+  }).event.referrer === null);
+  check('huge referrer string is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'a'.repeat(300),
+  }).event.referrer === null);
+  check('unicode in referrer is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com\u202e',
+  }).event.referrer === null);
+  check('object as referrer is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: { foo: 'bar' },
+  }).event.referrer === null);
+  check('array as referrer is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: ['reddit.com'],
+  }).event.referrer === null);
+  check('unknown referrer domain folds to other', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'unknown-site.example.com',
+  }).event.referrer === 'other');
+  check('known referrer domain is kept', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'reddit.com',
+  }).event.referrer === 'reddit.com');
+  check('old.reddit.com is aliased to reddit.com', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'old.reddit.com',
+  }).event.referrer === 'reddit.com');
+  check('news.ycombinator.com is kept as-is', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, referrer: 'news.ycombinator.com',
+  }).event.referrer === 'news.ycombinator.com');
+
+  /* Hostile input tests: ref */
+  check('script tag in ref folds to other', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: '<script>alert(1)</script>',
+  }).event.ref === 'other');
+  check('huge ref string is capped and folded', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'a'.repeat(100),
+  }).event.ref === 'other');
+  check('unicode in ref is stripped', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'hn\u202e',
+  }).event.ref === 'hn');
+  check('object as ref is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: { foo: 'bar' },
+  }).event.ref === null);
+  check('array as ref is rejected', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: ['hn'],
+  }).event.ref === null);
+  check('unknown ref tag folds to other', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'unknown-tag-123',
+  }).event.ref === 'other');
+  check('known ref tag is kept', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'hn',
+  }).event.ref === 'hn');
+  check('ref alias youtube to yt', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'youtube',
+  }).event.ref === 'yt');
+  check('ref alias twitter to x', ok({
+    v: 1, kind: 'visit', surface: 'sim', returning: false, ref: 'twitter',
+  }).event.ref === 'x');
   check('a session is accepted', !ok({
     v: 1, kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad',
   }).error);
@@ -2261,6 +2334,43 @@ async function testStats() {
 
     check('all time is every day there has ever been', after.allTime.laps === 9);
     check('and it knows when counting started', after.firstDay === before);
+
+    /* Referrer and ref folding to "other" and bounded output. */
+    await store.recordStats({
+      kind: 'visit', surface: 'sim', returning: false, source: 'direct',
+      referrer: 'reddit.com', ref: 'hn',
+    }, { day: before, country: 'AU' });
+    await store.recordStats({
+      kind: 'visit', surface: 'sim', returning: false, source: 'direct',
+      referrer: 'other', ref: 'other',
+    }, { day: before, country: 'AU' });
+    await store.recordStats({
+      kind: 'visit', surface: 'sim', returning: false, source: 'direct',
+      referrer: 'other', ref: 'other',
+    }, { day: before, country: 'AU' });
+    await store.recordStats({
+      kind: 'session', craft: '5inch', map: 'custom', input: 'gamepad', source: 'direct',
+      referrer: 'reddit.com', ref: 'hn',
+    }, { day: before, country: 'AU' });
+    await store.recordStats({
+      kind: 'flush', tab: 'aaaa1111', craft: '5inch', map: 'custom', laps: 5,
+      flightS: 60, crashes: 1, source: 'direct', referrer: 'reddit.com', ref: 'hn',
+    }, { day: before, country: 'AU' });
+    const withRef = await store.readStats({ days: 30, now });
+    const redditReferrer = withRef.referrers.find((r) => r.key === 'reddit.com');
+    const otherReferrer = withRef.referrers.find((r) => r.key === 'other');
+    const hnRef = withRef.refs.find((r) => r.key === 'hn');
+    const otherRef = withRef.refs.find((r) => r.key === 'other');
+    check('known referrer domain gets its own row', redditReferrer && redditReferrer.visits === 1
+      && redditReferrer.sessions === 1 && redditReferrer.laps === 5);
+    check('unknown referrer domains fold into "other"', otherReferrer && otherReferrer.visits === 2
+      && otherReferrer.sessions === 0 && otherReferrer.laps === 0);
+    check('known ref tag gets its own row', hnRef && hnRef.visits === 1
+      && hnRef.sessions === 1 && hnRef.laps === 5);
+    check('unknown ref tags fold into "other"', otherRef && otherRef.visits === 2
+      && otherRef.sessions === 0 && otherRef.laps === 0);
+    check('referrers array is bounded', withRef.referrers.length <= 50);
+    check('refs array is bounded', withRef.refs.length <= 50);
 
     /* The board's own tables, which are not counters and never were. */
     await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });

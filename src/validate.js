@@ -1478,6 +1478,130 @@ function delta(raw, max) {
 }
 
 /*
+ * REFERRER DOMAIN CLOSED LIST.
+ *
+ * A posted referrer is folded to one of these known domains or to "other",
+ * which is what keeps the stats_dims table bounded. A stranger with curl
+ * cannot grow the table by inventing domains.
+ *
+ * Grouped sensibly: reddit.com and old.reddit.com both become "reddit.com",
+ * youtube.com and m.youtube.com both become "youtube.com". The fold happens
+ * server-side only; the client sends the raw hostname and the server decides
+ * what it becomes.
+ */
+const KNOWN_REFERRERS = {
+  'reddit.com': 'reddit.com',
+  'old.reddit.com': 'reddit.com',
+  'new.reddit.com': 'reddit.com',
+  'www.reddit.com': 'reddit.com',
+  'youtube.com': 'youtube.com',
+  'm.youtube.com': 'youtube.com',
+  'www.youtube.com': 'youtube.com',
+  'youtu.be': 'youtube.com',
+  'google.com': 'google.com',
+  'www.google.com': 'google.com',
+  'google.co.uk': 'google.com',
+  'google.ca': 'google.com',
+  'google.com.au': 'google.com',
+  'bing.com': 'bing.com',
+  'www.bing.com': 'bing.com',
+  'duckduckgo.com': 'duckduckgo.com',
+  'twitter.com': 'x.com',
+  'x.com': 'x.com',
+  'mobile.twitter.com': 'x.com',
+  'mobile.x.com': 'x.com',
+  'facebook.com': 'facebook.com',
+  'm.facebook.com': 'facebook.com',
+  'www.facebook.com': 'facebook.com',
+  'instagram.com': 'instagram.com',
+  'www.instagram.com': 'instagram.com',
+  'discord.com': 'discord.com',
+  'discord.gg': 'discord.com',
+  'github.com': 'github.com',
+  'news.ycombinator.com': 'news.ycombinator.com',
+};
+
+/*
+ * REF TAG CLOSED LIST.
+ *
+ * A posted ref is folded to one of these known tags or to "other". Same
+ * reason: table size.
+ */
+const KNOWN_REFS = {
+  reddit: 'reddit',
+  r: 'reddit',
+  yt: 'yt',
+  youtube: 'yt',
+  hn: 'hn',
+  hackernews: 'hn',
+  x: 'x',
+  twitter: 'x',
+  facebook: 'facebook',
+  fb: 'facebook',
+  instagram: 'instagram',
+  ig: 'instagram',
+  github: 'github',
+  gh: 'github',
+  discord: 'discord',
+};
+
+/*
+ * Fold a referrer domain to a known key or "other".
+ *
+ * The client sends a domain (hostname only, no scheme or path), but it can
+ * send anything, so this:
+ * 1. Accepts only a bare hostname matching ^[a-z0-9-]+(\.[a-z0-9-]+)+$
+ * 2. Capped at 253 chars (DNS limit)
+ * 3. Folds to a known domain or "other"
+ *
+ * Full URLs, paths, query strings, ports, and anything that is not a
+ * well-formed hostname become null (not counted).
+ */
+export function referrerKey(raw) {
+  if (raw == null || raw === '') {
+    return null;
+  }
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const clean = String(raw).trim().toLowerCase();
+  if (!clean || clean.length > 253) {
+    return null;
+  }
+  /* Only accept a bare hostname: letters, digits, hyphens, and dots, with at
+   * least one dot. No scheme, no path, no port, no userinfo. */
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(clean)) {
+    return null;
+  }
+  const known = KNOWN_REFERRERS[clean];
+  return known || STATS_OTHER;
+}
+
+/*
+ * Fold a ref tag to a known key or "other".
+ *
+ * The client sends a short tag, but anything can arrive, so this:
+ * 1. Requires typeof string
+ * 2. Trims, lowercases, and strips non-alphanumeric-hyphen
+ * 3. Caps at 16 chars
+ * 4. Folds to a known tag or "other"
+ */
+export function refKey(raw) {
+  if (raw == null || raw === '') {
+    return null;
+  }
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const clean = String(raw).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16);
+  if (!clean) {
+    return null;
+  }
+  const known = KNOWN_REFS[clean];
+  return known || STATS_OTHER;
+}
+
+/*
  * Check one posted event. Returns { event } with exactly the fields the
  * store will read, or { error } with a sentence.
  *
@@ -1502,13 +1626,13 @@ export function inspectStatsEvent(body, sourceKey) {
   /* Referrer and ref are OPTIONAL on all event types, not just visits.
    * They are captured at visit time and stored in sessionStorage, then ride
    * on every event in that session (including flushes with laps), so laps
-   * can be attributed to the source that brought the visitor in. */
-  const referrer = body.referrer != null
-    ? String(body.referrer).trim().toLowerCase().slice(0, 100) || null
-    : null;
-  const ref = body.ref != null
-    ? String(body.ref).trim().toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16) || null
-    : null;
+   * can be attributed to the source that brought the visitor in.
+   *
+   * BOTH ARE CLOSED LISTS, folded server-side to known values or "other",
+   * which is what keeps the stats_dims table bounded. See referrerKey and
+   * refKey below. */
+  const referrer = referrerKey(body.referrer);
+  const ref = refKey(body.ref);
   if (kind === 'visit') {
     const surface = String(body.surface ?? '');
     if (!STATS_SURFACES.includes(surface)) {

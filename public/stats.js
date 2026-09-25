@@ -211,26 +211,42 @@ export function heldSource() {
  * Same-origin referrers are folded to null: somebody navigating within
  * webfpv.org is not an external referrer.
  */
+function extractHostname(urlOrDomain) {
+  /* Try parsing as a URL first (handles http://example.com/path). */
+  try {
+    const parsed = new URL(urlOrDomain);
+    return parsed.hostname;
+  } catch (e) {
+    /* Not a URL. Try parsing with a scheme prepended (handles example.com). */
+    try {
+      const parsed = new URL(`https://${urlOrDomain}`);
+      return parsed.hostname;
+    } catch (e2) {
+      /* Still not valid. Return null. */
+      return null;
+    }
+  }
+}
+
+function isSameHost(hostname, loc) {
+  if (!hostname || !loc) {
+    return false;
+  }
+  return hostname === loc.hostname;
+}
+
 export function referrerDomain(doc = document, loc = window.location) {
   try {
+    const currentHost = loc.hostname;
     /* First, check for an explicit ?referrer= parameter from the landing page. */
     const url = new URL(loc.href);
     const explicit = url.searchParams.get('referrer');
     if (explicit) {
-      /* Sanitise to domain only: strip protocol, path, and anything that isn't a hostname. */
       const clean = String(explicit).trim().toLowerCase();
       if (clean) {
-        /* Accept it if it looks like a domain. The landing page should send
-         * domain only, but a belt to that braces: try parsing it as a URL
-         * in case it's a full URL, and fall back to the string itself. */
-        try {
-          const parsed = new URL(clean.startsWith('http') ? clean : `https://${clean}`);
-          return parsed.hostname;
-        } catch (e) {
-          /* Not a parseable URL. Accept it as-is if it looks like a domain. */
-          if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(clean)) {
-            return clean;
-          }
+        const hostname = extractHostname(clean);
+        if (hostname && !isSameHost(hostname, loc)) {
+          return hostname;
         }
       }
     }
@@ -239,12 +255,11 @@ export function referrerDomain(doc = document, loc = window.location) {
     if (!ref) {
       return null;
     }
-    const refUrl = new URL(ref);
-    const currentHost = loc.hostname;
-    if (refUrl.hostname === currentHost) {
-      return null;
+    const hostname = extractHostname(ref);
+    if (hostname && !isSameHost(hostname, loc)) {
+      return hostname;
     }
-    return refUrl.hostname;
+    return null;
   } catch (e) {
     return null;
   }
@@ -384,6 +399,10 @@ export function sessionAttribution() {
  * visits, so that laps can be attributed to the source that brought the
  * visitor in. The values are stored in sessionStorage when a visit happens
  * and ride on every event in that session.
+ *
+ * FRESH VALUES BEAT STALE: payload.referrer and payload.ref (explicit values
+ * from a new visit) override sessionStorage, so a visitor arriving with a
+ * new ?ref= parameter gets that attribution, not the stale session value.
  */
 export function sendEvent(payload, url) {
   if (!counting()) {
@@ -394,8 +413,8 @@ export function sendEvent(payload, url) {
     v: 1,
     ...payload,
     source: heldSource(),
-    referrer: attr.referrer || payload.referrer || null,
-    ref: attr.ref || payload.ref || null,
+    referrer: payload.referrer || attr.referrer || null,
+    ref: payload.ref || attr.ref || null,
   });
   try {
     if (navigator.sendBeacon) {
@@ -423,14 +442,19 @@ export function pingVisit(surface, url) {
   if (!counting()) {
     return false;
   }
-  const visit = markVisit();
-  if (!visit) {
-    return false;
-  }
+  /* Capture referrer and ref on EVERY page load, not just the first visit
+   * of the day. This lets a visitor arriving with a new ?ref= parameter get
+   * that attribution, even if they already visited today. Fresh values are
+   * stored and override any stale sessionStorage values. */
   const referrer = referrerDomain();
   const ref = captureRefTag();
-  /* Store in sessionStorage so flush events can include them. */
   storeSessionAttribution(referrer, ref);
+  const visit = markVisit();
+  if (!visit) {
+    /* Already counted today. Attribution is still stored above, so later
+     * events in this session get the fresh values. */
+    return false;
+  }
   return sendEvent({
     kind: 'visit',
     surface,
