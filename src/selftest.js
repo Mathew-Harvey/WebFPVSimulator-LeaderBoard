@@ -1939,6 +1939,15 @@ async function testHttp() {
   }
 }
 
+async function testPublicFiles() {
+  console.log('\npublic files');
+
+  const indexHtml = await readFile(join(root, 'public', 'index.html'), 'utf8');
+  const appJs = await readFile(join(root, 'public', 'app.js'), 'utf8');
+
+  check('no old patreon.com/c/ URL in index.html', !indexHtml.includes('patreon.com/c/'));
+  check('no old patreon.com/c/ URL in app.js', !appJs.includes('patreon.com/c/'));
+}
 
 /*
  * The links a visitor clicks must be right whether or not /api/config
@@ -2416,6 +2425,7 @@ async function testStats() {
   }
 }
 
+await testPublicFiles();
 testOrigins();
 testAdmin();
 await testValidate();
