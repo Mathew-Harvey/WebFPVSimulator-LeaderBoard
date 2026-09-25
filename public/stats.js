@@ -196,6 +196,142 @@ export function heldSource() {
 }
 
 /*
+ * EXTRACT THE REFERRER DOMAIN, stripping the protocol and path.
+ *
+ * Referrer is captured at visit time and stored in sessionStorage for the
+ * duration of that session. Only the domain is sent; a full URL would be
+ * personal data, a domain is attribution.
+ *
+ * PREFERS AN EXPLICIT ?referrer= PARAMETER over document.referrer. This is
+ * the carry-through from the landing page: when a visitor arrives from an
+ * external site to webfpv.org, the landing page captures the original
+ * referrer and appends it as ?referrer=<domain> when linking to /board/ or
+ * /sim/. Without this, document.referrer would be webfpv.org (same-origin)
+ * and the original source would be lost.
+ *
+ * Same-origin referrers are folded to null: somebody navigating within
+ * webfpv.org is not an external referrer.
+ */
+export function extractHostname(urlOrDomain) {
+  /* Try parsing as a URL first (handles http://example.com/path). */
+  try {
+    const parsed = new URL(urlOrDomain);
+    return parsed.hostname;
+  } catch (e) {
+    /* Not a URL. Try parsing with a scheme prepended (handles example.com). */
+    try {
+      const parsed = new URL(`https://${urlOrDomain}`);
+      return parsed.hostname;
+    } catch (e2) {
+      /* Still not valid. Return null. */
+      return null;
+    }
+  }
+}
+
+export function isSameHost(hostname, loc) {
+  if (!hostname || !loc) {
+    return false;
+  }
+  /* Strip leading www. so www.webfpv.org and webfpv.org are treated as
+   * same-origin. */
+  const stripWww = (h) => (h && h.startsWith('www.') ? h.slice(4) : h);
+  return stripWww(hostname) === stripWww(loc.hostname);
+}
+
+export function referrerDomain(doc = document, loc = window.location) {
+  try {
+    const currentHost = loc.hostname;
+    /* First, check for an explicit ?referrer= parameter from the landing page. */
+    const url = new URL(loc.href);
+    const explicit = url.searchParams.get('referrer');
+    if (explicit) {
+      const clean = String(explicit).trim().toLowerCase();
+      if (clean) {
+        const hostname = extractHostname(clean);
+        if (hostname && !isSameHost(hostname, loc)) {
+          return hostname;
+        }
+      }
+    }
+    /* Fall back to document.referrer. */
+    const ref = String(doc.referrer || '').trim();
+    if (!ref) {
+      return null;
+    }
+    const hostname = extractHostname(ref);
+    if (hostname && !isSameHost(hostname, loc)) {
+      return hostname;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/*
+ * NORMALISE A ?ref= TAG TO A SHORT SLUG.
+ *
+ * Maps common referrer sources to short tags (reddit, yt, discord, etc).
+ * Unknown values are sanitised and length-limited. This is separate from
+ * utm_source (sponsor slugs) and is meant for organic/manual attribution.
+ */
+export function normaliseRefTag(raw) {
+  if (raw == null || raw === '') {
+    return null;
+  }
+  const clean = String(raw).trim().toLowerCase();
+  if (!clean) {
+    return null;
+  }
+  /* Map common variants to canonical short tags. */
+  const known = {
+    reddit: 'reddit',
+    r: 'reddit',
+    youtube: 'yt',
+    yt: 'yt',
+    discord: 'discord',
+    twitter: 'x',
+    x: 'x',
+    facebook: 'facebook',
+    fb: 'facebook',
+    instagram: 'instagram',
+    ig: 'instagram',
+    hn: 'hn',
+    hackernews: 'hn',
+    github: 'github',
+    gh: 'github',
+  };
+  if (known[clean]) {
+    return known[clean];
+  }
+  /* For unknown values, sanitise to alphanumeric and hyphens, limit length. */
+  const sanitised = clean.replace(/[^a-z0-9-]/g, '').slice(0, 16);
+  return sanitised || null;
+}
+
+/*
+ * CAPTURE ?ref= PARAMETER and return its normalised form.
+ *
+ * This is read from the query string on every visit and sent with that
+ * visit's event. Unlike utm_source, it is NOT stored in localStorage and
+ * does not persist across visits, because it is meant for per-link
+ * attribution rather than per-poster campaigns.
+ *
+ * The parameter is NOT stripped from the URL: it is lightweight enough to
+ * leave in place, and removing it would interfere with utm_ stripping.
+ */
+export function captureRefTag(loc = window.location) {
+  try {
+    const url = new URL(loc.href);
+    const raw = url.searchParams.get('ref');
+    return normaliseRefTag(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+/*
  * Mark this browser as counted today, and say whether it had been here
  * before. Returns null when it has already been counted today, which is
  * what makes a visit once per browser per day across all three pages.
@@ -214,16 +350,76 @@ export function markVisit() {
 }
 
 /*
+ * STORE REFERRER AND REF FOR THIS SESSION.
+ *
+ * These are stored in sessionStorage (not localStorage) so they persist for
+ * the current session only, not for 30 days like the sponsor source does.
+ * This lets laps be attributed to the referrer/ref that brought the visitor
+ * in, without making those values a standing label the way a sponsor slug is.
+ *
+ * A session here is browser-session: closing the tab ends it, reloading
+ * preserves it. This matches the tab handle's lifetime.
+ */
+const SESSION_ATTR_KEY = 'webfpv.session.attribution';
+
+export function storeSessionAttribution(referrer, ref) {
+  try {
+    /* Always write both keys. A null value clears the stale sessionStorage
+     * value, so don't skip the write when both are null. */
+    const attr = {
+      referrer: referrer || null,
+      ref: ref || null,
+    };
+    sessionStorage.setItem(SESSION_ATTR_KEY, JSON.stringify(attr));
+  } catch (e) {
+    /* Private mode or storage full. Non-fatal: attribution just won't
+     * persist to later events. */
+  }
+}
+
+export function sessionAttribution() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_ATTR_KEY);
+    if (!raw) {
+      return {};
+    }
+    const attr = JSON.parse(raw);
+    return attr && typeof attr === 'object' && !Array.isArray(attr) ? attr : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+/*
  * Post one event. A beacon, so it survives the page being closed, which is
  * exactly when the last flush is sent. text/plain because a beacon cannot
  * set a header and a simple request needs no preflight; the board never
  * reads the content type.
+ *
+ * Session attribution (referrer and ref) is added to ALL events, not just
+ * visits, so that laps can be attributed to the source that brought the
+ * visitor in. The values are stored in sessionStorage when a visit happens
+ * and ride on every event in that session.
+ *
+ * FRESH VALUES BEAT STALE: payload.referrer and payload.ref (explicit values
+ * from a new visit) override sessionStorage, so a visitor arriving with a
+ * new ?ref= parameter gets that attribution, not the stale session value.
  */
 export function sendEvent(payload, url) {
   if (!counting()) {
     return false;
   }
-  const body = JSON.stringify({ v: 1, ...payload, source: heldSource() });
+  const attr = sessionAttribution();
+  /* Use 'in' operator to distinguish explicit null from missing key. An
+   * explicit null (e.g. same-origin visit) must not be re-credited from a
+   * stale session value. */
+  const body = JSON.stringify({
+    v: 1,
+    ...payload,
+    source: heldSource(),
+    referrer: 'referrer' in payload ? payload.referrer : (attr.referrer || null),
+    ref: 'ref' in payload ? payload.ref : (attr.ref || null),
+  });
   try {
     if (navigator.sendBeacon) {
       return navigator.sendBeacon(url, new Blob([body], { type: 'text/plain;charset=UTF-8' }));
@@ -250,11 +446,26 @@ export function pingVisit(surface, url) {
   if (!counting()) {
     return false;
   }
+  /* Capture referrer and ref on EVERY page load, not just the first visit
+   * of the day. This lets a visitor arriving with a new ?ref= parameter get
+   * that attribution, even if they already visited today. Fresh values are
+   * stored and override any stale sessionStorage values. */
+  const referrer = referrerDomain();
+  const ref = captureRefTag();
+  storeSessionAttribution(referrer, ref);
   const visit = markVisit();
   if (!visit) {
+    /* Already counted today. Attribution is still stored above, so later
+     * events in this session get the fresh values. */
     return false;
   }
-  return sendEvent({ kind: 'visit', surface, returning: visit.returning }, url);
+  return sendEvent({
+    kind: 'visit',
+    surface,
+    returning: visit.returning,
+    referrer,
+    ref,
+  }, url);
 }
 
 /* ------------------------------------------------------------------ */
