@@ -2217,6 +2217,27 @@ async function testStats() {
     v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44, referrer: 'reddit.com', ref: 'hn',
   }).error);
 
+  check('a support click from sim is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'sim',
+  }).error);
+  check('a support click from landing is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'landing',
+  }).error);
+  check('a support click from unknown source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: 'builder',
+  }).error));
+  check('a support click with no source is refused', Boolean(ok({
+    v: 1, kind: 'support_click',
+  }).error));
+  check('a support click with hostile source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: '<script>alert(1)</script>',
+  }).error));
+  const supportEvent = ok({
+    v: 1, kind: 'support_click', source: 'sim', extra: 'ignored',
+  }).event;
+  check('nothing but the counted fields comes out of a support click',
+    Object.keys(supportEvent).sort().join(',') === 'kind,source');
+
   check('a version this board does not read is refused', Boolean(ok({ v: 2, kind: 'visit' }).error));
   check('an unknown kind is refused', Boolean(ok({ v: 1, kind: 'pageview' }).error));
   check('a visit from an unknown page is refused', Boolean(ok({
@@ -2400,6 +2421,20 @@ async function testStats() {
       && otherRef.sessions === 0 && otherRef.laps === 0);
     check('referrers array is bounded', withRef.referrers.length <= 50);
     check('refs array is bounded', withRef.refs.length <= 50);
+
+    /* Support clicks from both sources. */
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'landing',
+    }, { day, country: 'AU' });
+    const withSupport = await store.readStats({ days: 7, now });
+    check('support clicks from sim are counted', withSupport.support && withSupport.support.sim === 2);
+    check('support clicks from landing are counted', withSupport.support && withSupport.support.landing === 1);
 
     /* The board's own tables, which are not counters and never were. */
     await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });

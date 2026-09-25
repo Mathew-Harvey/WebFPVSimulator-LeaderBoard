@@ -398,6 +398,11 @@ export function shapeStats({
   const of = (dim) => dimRows.filter((r) => r.dim === dim).sort(byDimRow);
   const countries = of('country');
   window.countries = countries.filter((r) => r.key !== STATS_COUNTRY_UNKNOWN).length;
+  const supportRows = of('support_source');
+  const support = {
+    sim: (supportRows.find((r) => r.key === 'sim') || { visits: 0 }).visits,
+    landing: (supportRows.find((r) => r.key === 'landing') || { visits: 0 }).visits,
+  };
   return {
     generatedUtc: new Date(now).toISOString(),
     firstDay: firstDay || null,
@@ -413,6 +418,7 @@ export function shapeStats({
     maps: of('map'),
     inputs: of('input'),
     surfaces: of('surface'),
+    support,
   };
 }
 
@@ -1011,6 +1017,8 @@ class FileStore {
       if (event.ref) {
         bump('ref', event.ref, 'sessions', 1);
       }
+    } else if (event.kind === 'support_click') {
+      bump('support_source', event.source, 'visits', 1);
     } else {
       row.laps += event.laps;
       row.flightS += event.flightS;
@@ -1836,6 +1844,8 @@ class PgStore {
       if (event.ref) {
         bump('ref', event.ref, 0, 1, 0);
       }
+    } else if (event.kind === 'support_click') {
+      bump('support_source', event.source, 1, 0, 0);
     } else {
       laps = event.laps;
       flightS = event.flightS;
