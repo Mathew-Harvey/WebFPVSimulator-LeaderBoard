@@ -177,6 +177,13 @@ let statsCache = { at: 0, body: '' };
 const STATS_FLOOD_LIMIT = 600;
 
 /*
+ * Support link clicks get a tighter limit: three per ten minutes per
+ * address. Over the limit they are silently dropped (204, not counted) so a
+ * script cannot tell whether the limit exists.
+ */
+const SUPPORT_CLICK_LIMIT = 3;
+
+/*
  * GLOBAL PRIVACY CONTROL, and it is honoured on the server as well as in
  * the page.
  *
@@ -611,6 +618,17 @@ async function handleApi(req, res, url) {
     if (inspected.error) {
       send(res, 400, { error: inspected.error });
       return;
+    }
+    /* Support clicks have their own tighter limit: three per ten minutes.
+     * Over the limit they are silently dropped so a script cannot tell the
+     * limit exists. */
+    if (inspected.event.kind === 'support_click') {
+      if (bugFlooded(`support:${ip}`, SUPPORT_CLICK_LIMIT)) {
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
+      recordBugHit(`support:${ip}`);
     }
     /* Spent only on an event that was actually stored, the same rule the
      * bug form follows: eight malformed posts should not lock out a pilot

@@ -2021,6 +2021,24 @@ async function testHttp() {
     const notJson = await fetch(`${B}/api/stats/events`, { method: 'POST', body: 'not json at all' });
     check('and so is something that is not JSON', notJson.status === 400);
 
+    /* Support click events and their rate limit. */
+    const supportLanding = await post({ v: 1, kind: 'support_click', source: 'landing' });
+    check('a support click from landing returns 204', supportLanding.status === 204);
+    const supportBadSource = await post({ v: 1, kind: 'support_click', source: 'builder' });
+    check('a support click from unknown source returns 400', supportBadSource.status === 400);
+    const supportGpc = await fetch(`${B}/api/stats/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'sec-gpc': '1' },
+      body: JSON.stringify({ v: 1, kind: 'support_click', source: 'landing' }),
+    });
+    check('a support click with GPC returns 204', supportGpc.status === 204);
+    const support2 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a second support click returns 204', support2.status === 204);
+    const support3 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a third support click returns 204', support3.status === 204);
+    const support4 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a fourth support click returns 204', support4.status === 204);
+
     const statsRes = await fetch(`${B}/api/stats`);
     const stats = await statsRes.json();
     check('the statistics read answers', statsRes.status === 200);
@@ -2035,6 +2053,13 @@ async function testHttp() {
       stats.today.sessions === 1 && stats.today.laps === 4 && stats.today.flightS === 61);
     check('the flying tab is counted as flying now', stats.live.flying === 1);
     check('the window is thirty days', stats.days.length === 30);
+
+    check('the stats have a support object', stats.support && typeof stats.support === 'object');
+    check('support has exactly sim and landing keys',
+      stats.support && Object.keys(stats.support).sort().join(',') === 'landing,sim');
+    check('support.sim counts two clicks under the limit', stats.support.sim === 2);
+    check('support.landing counts one click', stats.support.landing === 1);
+    check('and the GPC support click was not counted', stats.support.landing === 1);
 
     const sourceRow = (key) => stats.sources.find((r) => r.key === key) || {};
     check("a real sponsor keeps its own row", sourceRow('rotorriot').visits === 1);
@@ -2400,6 +2425,30 @@ async function testStats() {
     v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44, referrer: 'reddit.com', ref: 'hn',
   }).error);
 
+  check('a support click from sim is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'sim',
+  }).error);
+  check('a support click from landing is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'landing',
+  }).error);
+  check('a support click from unknown source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: 'builder',
+  }).error));
+  check('a support click with no source is refused', Boolean(ok({
+    v: 1, kind: 'support_click',
+  }).error));
+  check('a support click with hostile source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: '<script>alert(1)</script>',
+  }).error));
+  check('a support click with array source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: ['sim'],
+  }).error));
+  const supportEvent = ok({
+    v: 1, kind: 'support_click', source: 'sim', extra: 'ignored',
+  }).event;
+  check('nothing but the counted fields comes out of a support click',
+    Object.keys(supportEvent).sort().join(',') === 'kind,source');
+
   check('a version this board does not read is refused', Boolean(ok({ v: 2, kind: 'visit' }).error));
   check('an unknown kind is refused', Boolean(ok({ v: 1, kind: 'pageview' }).error));
   check('a visit from an unknown page is refused', Boolean(ok({
@@ -2583,6 +2632,29 @@ async function testStats() {
       && otherRef.sessions === 0 && otherRef.laps === 0);
     check('referrers array is bounded', withRef.referrers.length <= 50);
     check('refs array is bounded', withRef.refs.length <= 50);
+
+    /* Support clicks from both sources. */
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'landing',
+    }, { day, country: 'AU' });
+    const withSupport = await store.readStats({ days: 7, now });
+    check('support clicks from sim are counted', withSupport.support && withSupport.support.sim === 2);
+    check('support clicks from landing are counted', withSupport.support && withSupport.support.landing === 1);
+
+    /* A support-only day does not create a day row or move firstDay. */
+    const supportOnlyDay = '2026-09-10';
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day: supportOnlyDay, country: 'AU' });
+    const afterSupportOnly = await store.readStats({ days: 30, now });
+    check('a support-only day does not move firstDay', afterSupportOnly.firstDay === before);
+    check('and does not create a stats_days row', store.data.stats.days[supportOnlyDay] === undefined);
 
     /* The board's own tables, which are not counters and never were. */
     await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });

@@ -1516,13 +1516,17 @@ export function inspectRun(body) {
  * clamping would store a number the sender did not send.
  */
 
-export const STATS_KINDS = ['visit', 'session', 'flush'];
+export const STATS_KINDS = ['visit', 'session', 'flush', 'support_click'];
 
 /* Which page sent it. The landing page is on the list before it sends
  * anything, because the board ships before the pages that talk to it and a
  * surface the board refuses is a deploy order this repository already has
  * a rule about. See DEPLOY.md in the simulator's repository. */
 export const STATS_SURFACES = ['sim', 'builder', 'board', 'landing'];
+
+/* Where a support link click came from. Closed list, exactly two entries,
+ * matching the two places this board knows a support link is shown. */
+export const SUPPORT_SOURCES = ['sim', 'landing'];
 
 /* The aircraft, spelled as the simulator's own settings spell it, so the
  * page can print "Five inch" and "65 mm whoop" from a key that is not a
@@ -1791,6 +1795,18 @@ export function inspectStatsEvent(body, sourceKey) {
         source,
         referrer,
         ref,
+      },
+    };
+  }
+  if (kind === 'support_click') {
+    const clickSource = typeof body.source === 'string' ? body.source : '';
+    if (!SUPPORT_SOURCES.includes(clickSource)) {
+      return { error: 'That support click source must be sim or landing.' };
+    }
+    return {
+      event: {
+        kind,
+        source: clickSource,
       },
     };
   }
