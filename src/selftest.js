@@ -2155,6 +2155,34 @@ async function testPublicFiles() {
 
   check('no old patreon.com/c/ URL in index.html', !indexHtml.includes('patreon.com/c/'));
   check('no old patreon.com/c/ URL in app.js', !appJs.includes('patreon.com/c/'));
+
+  const patreonNoteInAppJs = appJs.match(/const PATREON_NOTE = '([^']+)'/)?.[1] || '';
+  const patreonLabelsInIndexHtml = [...indexHtml.matchAll(/aria-label="([^"]*Patreon[^"]*)"/g)].map(m => m[1]);
+
+  check('old $5 tier not in PATREON_NOTE', !patreonNoteInAppJs.includes('$5'));
+  check('old $12 tier not in PATREON_NOTE', !patreonNoteInAppJs.includes('$12'));
+  check('old $25 tier not in PATREON_NOTE', !patreonNoteInAppJs.includes('$25'));
+  check('GST claim not in PATREON_NOTE', !patreonNoteInAppJs.includes('GST'));
+
+  check('old $5 tier not in index.html Patreon labels',
+    !patreonLabelsInIndexHtml.some(label => label.includes('$5')));
+  check('old $12 tier not in index.html Patreon labels',
+    !patreonLabelsInIndexHtml.some(label => label.includes('$12')));
+  check('old $25 tier not in index.html Patreon labels',
+    !patreonLabelsInIndexHtml.some(label => label.includes('$25')));
+  check('GST claim not in index.html Patreon labels',
+    !patreonLabelsInIndexHtml.some(label => label.includes('GST')));
+
+  check('new $3 tier in PATREON_NOTE', patreonNoteInAppJs.includes('$3'));
+  check('new $8 tier in PATREON_NOTE', patreonNoteInAppJs.includes('$8'));
+  check('new $20 tier in PATREON_NOTE', patreonNoteInAppJs.includes('$20'));
+
+  check('new $3 tier in index.html Patreon labels',
+    patreonLabelsInIndexHtml.some(label => label.includes('$3')));
+  check('new $8 tier in index.html Patreon labels',
+    patreonLabelsInIndexHtml.some(label => label.includes('$8')));
+  check('new $20 tier in index.html Patreon labels',
+    patreonLabelsInIndexHtml.some(label => label.includes('$20')));
 }
 
 /*

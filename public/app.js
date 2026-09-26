@@ -57,7 +57,7 @@ import {
  */
 const PATREON_URL = 'https://www.patreon.com/cw/webfpv';
 
-const PATREON_NOTE = 'Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.';
+const PATREON_NOTE = 'Support WebFPV on Patreon. Keep the lights on, $3. Hosting + runway, $8. Build the sim, $20. USD a month.';
 
 /*
  * HOW A LINK THAT LEAVES THE PRODUCT OPENS: in a tab of its own, with no
