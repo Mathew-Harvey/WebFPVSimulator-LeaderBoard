@@ -159,6 +159,33 @@ changing them never clears a time. Leaving `tags` out and sending
 tags the course already wears, and an empty list takes them all off. The
 answer carries the `tags` the course wears afterwards.
 
+## The lap floor
+
+A posted lap nobody could fly is refused with a 400 and a sentence, like
+any other bad post. Two rules, both in `judgeLap` in `src/validate.js`,
+which says why each number is what it is:
+
+- **No lap under 0.25 s on any track.** One full turn round a single
+  point, at everything the five inch plant can pull sideways, takes about
+  0.31 s. Tracks whose stations all stand on one spot, like Orbit, have no
+  length for the second rule to measure, so this is the rule that speaks
+  for them.
+- **No lap faster than the track's length at 50 m/s.** The length is the
+  straight line distance on the ground from each scored station to the
+  next, closed back to the first, read off the stored document. The plant
+  tops out at 40 m/s and the fastest real average on the board is under
+  23 m/s over the same length, so the margin is on the side of keeping a
+  lap.
+
+A room's three lap total is held to three floors.
+
+The laps stored before the floor existed are taken out once, when the
+service starts, by the same function: `purgeImpossibleLaps` in
+`src/store.js`. It is named (`lap-floor-2026-09-26`) and recorded in the
+`migrations` table, so it never runs twice, and the service log has one
+line for every row it removed. A track's record is read from its rows, so
+it falls to the fastest lap that is left without anything else to update.
+
 ## Signing in
 
 **Admin** in the masthead opens a sign in panel. An address on the board's

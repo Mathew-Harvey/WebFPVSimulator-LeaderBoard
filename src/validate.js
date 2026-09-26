@@ -798,6 +798,207 @@ export function inspectDocument(raw) {
 }
 
 /* ------------------------------------------------------------------ */
+/* The lap floor                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A LAP NOBODY CAN FLY IS REFUSED, by two rules, because a posted lap can be
+ * impossible in two ways. The owner's decision of 26 September 2026 was to
+ * remove the impossible records, and a survey of the live board found one
+ * of each: 0.20 s round Flags and cones, which is 120 m at 600 m/s, and 10
+ * and 15 ms round Orbit (Anticlockwise), whose two stations are flags on one
+ * pole turned a quarter apart, so a craft beside the pole can cross both
+ * scoring windows and the first again in a couple of steps without flying
+ * anything that could be called a lap.
+ *
+ * ONE FUNCTION JUDGES BOTH A POST AND THE ROWS ALREADY STORED. judgeLap is
+ * what addTime asks before it writes and what purgeImpossibleLaps in
+ * src/store.js asks of every stored row, so the refusal and the cleanup can
+ * never disagree about what a lap is.
+ */
+
+/*
+ * THE ABSOLUTE FLOOR, A QUARTER OF A SECOND, set by the tracks on this board
+ * and by the plant rather than picked.
+ *
+ * Several tracks put every station on one spot: Orbit and Simple Orbits are
+ * two flags on one pole, Power Loops is two openings of one ladder, and the
+ * Whoop Triple Stack is three. Their length below is nought, so the speed
+ * rule has nothing to say about them and this is the rule that does.
+ *
+ * The quickest genuine lap of a spot is one full turn round it. The five
+ * inch plant is 8.4 to 1 (configs/airframes.js in the simulator), so in a
+ * level turn it pulls at most 9.81 x sqrt(8.4 x 8.4 - 1), about 81.8 m/s/s
+ * sideways, and a machine 0.35 m across cannot circle a pole on a line
+ * nearer than about 0.2 m to it. One turn at that radius and that pull is
+ * 2 pi sqrt(0.2 / 81.8), 0.31 s. The room's whoop flies the same plant.
+ *
+ * The fastest laps posted on those tracks are 659 ms round Simple Orbits
+ * and 739 ms round Orbit, each by the author on the day it was built, and
+ * 1743 ms through Power Loops, the last of eight posts that came down from
+ * 3177. All three are tight turns a pilot can fly, and all three stay. Two
+ * seconds, the order this floor was first expected to be, would have
+ * refused every one of them. The floor sits under the physics rather than
+ * on it, so its margin is on the side of keeping a lap.
+ */
+export const LAP_FLOOR_MS = 250;
+
+/*
+ * THE PER TRACK FLOOR: no lap faster than the track's own length at 50 m/s.
+ *
+ * Fifty is generous on purpose. The simulator's five inch tops out at forty
+ * metres a second (its own airframe blurb), and the fastest average any lap
+ * on the live board makes over the length below is 22.7 m/s, measured on 26
+ * September 2026: 5.07 s round an untitled five gate loop of 115 m.
+ */
+export const LAP_TOP_SPEED = 50;
+
+/*
+ * MIRRORS the station rule in the simulator's src/game/trackdoc.js. Every
+ * opening in the flying order is a station, and a flag, a cone or a pole is
+ * one when its clearance is at least 5 cm, read the way the builder's
+ * normaliser reads it: the entry's own, then the element's. A waypoint never
+ * is, because it pins the line and scores nothing.
+ */
+const STATION_MARKERS = new Set(['flag', 'cone', 'pole']);
+const MARKER_MIN_CLEARANCE = 0.05;
+
+function markerClearance(step, el) {
+  if (typeof step.clearance === 'number' && Number.isFinite(step.clearance)) {
+    return step.clearance;
+  }
+  const held = isObject(el.dims) ? el.dims.clearance : undefined;
+  return typeof held === 'number' && Number.isFinite(held) ? held : 0;
+}
+
+/*
+ * The scored stations of a track, in flying order, as points on the ground
+ * in the document's own metres.
+ *
+ * ANYTHING THIS CANNOT READ IS LEFT OUT rather than guessed at, and that is
+ * the safe way round for the one thing it is for. Dropping a point from a
+ * closed loop can only shorten the loop, by the triangle inequality, and a
+ * shorter length is a lower floor. An element of a type the simulator does
+ * not know is dropped on its side too, so it never was a station.
+ */
+export function stationsOf(document) {
+  const byId = new Map();
+  for (const el of (isObject(document) && Array.isArray(document.elements)) ? document.elements : []) {
+    if (isObject(el) && typeof el.id === 'string' && el.id) {
+      byId.set(el.id, el);
+    }
+  }
+  const out = [];
+  for (const step of (isObject(document) && Array.isArray(document.sequence)) ? document.sequence : []) {
+    if (!isObject(step)) {
+      continue;
+    }
+    const el = byId.get(step.elementId);
+    if (!el || !isObject(el.position)) {
+      continue;
+    }
+    const type = String(el.type || '');
+    const scored = PLAN_APERTURE.has(type)
+      || (STATION_MARKERS.has(type) && markerClearance(step, el) >= MARKER_MIN_CLEARANCE);
+    const x = Number(el.position.x);
+    const y = Number(el.position.y);
+    if (scored && Number.isFinite(x) && Number.isFinite(y)) {
+      out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+/*
+ * The track's length for the floor: the straight line distances on the
+ * ground between consecutive stations, closed back to the first.
+ *
+ * CLOSED, because that is what a lap is. Race in the simulator's
+ * src/game/race.js times from the first real opening, round every station
+ * in order and back through it, so every leg of the loop is flown once a
+ * lap, the closing one included.
+ *
+ * ON THE GROUND, because height only adds: a line that climbs is longer than
+ * its plan, so leaving the climb out keeps this under the line flown.
+ *
+ * IN THE DOCUMENT'S METRES, which on a RaceGOW room are RaceGOW's own. The
+ * room is flown 3.43 times life size (MICRO_SCALE in the simulator), so a
+ * room's length here is under a third of what is flown and its floor is
+ * softer by the same factor, which is the safe direction.
+ *
+ * ONE ALLOWANCE, WRITTEN DOWN RATHER THAN HIDDEN. A pass is credited
+ * anywhere in a station's scoring window, not at its centre: on the field a
+ * gate's opening built 15 percent large and half a metre deep either side,
+ * and beside a flag or a cone a square a few metres wide on its pass side.
+ * A line that threads every window at its near edge can be somewhat shorter
+ * than the centre to centre loop. Measuring window to window needs the
+ * racing line, which is the simulator's to solve and not this board's, so
+ * the top speed carries that margin instead: LAP_TOP_SPEED is a quarter
+ * over the plant's own top speed and more than twice the fastest real
+ * average on the board over this same length.
+ */
+export function trackLengthOf(document) {
+  const at = stationsOf(document);
+  let metres = 0;
+  for (let i = 0; i < at.length; i += 1) {
+    const a = at[i];
+    const b = at[(i + 1) % at.length];
+    metres += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return metres;
+}
+
+/*
+ * The shortest lap this board keeps on a track, in milliseconds, with the
+ * length it came from and which rule set it. Rounded DOWN to the
+ * millisecond, so a lap exactly at the limit is kept.
+ */
+export function lapFloorOf(document) {
+  const metres = trackLengthOf(document);
+  const bySpeed = Math.floor((metres / LAP_TOP_SPEED) * 1000);
+  return bySpeed > LAP_FLOOR_MS
+    ? { ms: bySpeed, metres, rule: 'speed' }
+    : { ms: LAP_FLOOR_MS, metres, rule: 'absolute' };
+}
+
+function seconds(ms) {
+  return (ms / 1000).toFixed(3);
+}
+
+/*
+ * One lap, judged against the track it was flown on: null when the board
+ * keeps it, or { error, rule, floorMs, metres } when it does not.
+ *
+ * `threeMs`, a RaceGOW three lap total, is held to three floors, because
+ * three laps under that hold a lap under the floor. normaliseThreeMs already
+ * refuses a total under three of its own lap, so on a post this only ever
+ * speaks through the lap; the clause is for rows already stored.
+ *
+ * A value that is not a number is not judged. A stored row always has a
+ * lap, and a claim this cannot read is not a claim it can call impossible:
+ * the cleanup deletes what fails this rule and nothing else.
+ */
+export function judgeLap({ lapMs, threeMs } = {}, document) {
+  const floor = lapFloorOf(document);
+  const refuse = (error) => ({
+    error, rule: floor.rule, floorMs: floor.ms, metres: floor.metres,
+  });
+  if (typeof lapMs === 'number' && Number.isFinite(lapMs) && lapMs < floor.ms) {
+    /* Worded round the floor's time rather than the lap's speed: a lap a
+     * millisecond under the floor is 50.04 m/s, and a sentence that rounds
+     * that to "50 m/s" and then refuses it for being over 50 reads wrong. */
+    if (floor.rule === 'speed') {
+      return refuse(`That lap is ${seconds(lapMs)} s. This track is at least ${Math.round(floor.metres)} m round, so a lap of it takes at least ${seconds(floor.ms)} s even at ${LAP_TOP_SPEED} m/s, which is faster than anything here flies. The board does not keep it.`);
+    }
+    return refuse(`That lap is ${seconds(lapMs)} s. No track can be lapped in under ${seconds(LAP_FLOOR_MS)} s, so the board does not keep it.`);
+  }
+  if (typeof threeMs === 'number' && Number.isFinite(threeMs) && threeMs < floor.ms * 3) {
+    return refuse(`That three lap total is ${seconds(threeMs)} s, which is under three of the fastest lap this track allows, so the board does not keep it.`);
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
 /* Freestyle maps                                                      */
 /* ------------------------------------------------------------------ */
 

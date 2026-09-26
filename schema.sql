@@ -319,3 +319,26 @@ ALTER TABLE tracks ADD COLUMN IF NOT EXISTS card BYTEA;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS card_utc TIMESTAMPTZ;
 ALTER TABLE maps ADD COLUMN IF NOT EXISTS card BYTEA;
 ALTER TABLE maps ADD COLUMN IF NOT EXISTS card_utc TIMESTAMPTZ;
+
+-- ------------------------------------------------------------------
+-- One time jobs, by name.
+-- ------------------------------------------------------------------
+--
+-- Everything above this runs on every start and is safe to, because it only
+-- ever adds. A job that DELETES is not, so it is run once and written down
+-- here: one row per job this database has done, and a job whose name is
+-- already here is not run again. The first is 'lap-floor-2026-09-26', which
+-- took out the stored laps no track allows (LAP_FLOOR_PURGE and
+-- purgeImpossibleLaps in src/store.js, judgeLap in src/validate.js). Its
+-- note says how many rows it removed; the service log says which.
+--
+-- Deleting a row here runs that job again on the next start, which is the
+-- way to do it on purpose and the reason not to do it by accident.
+--
+-- Additive: an existing database gains this the next time the process
+-- starts, and nothing already stored is rewritten.
+CREATE TABLE IF NOT EXISTS migrations (
+  name TEXT PRIMARY KEY,
+  ran_utc TIMESTAMPTZ NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);

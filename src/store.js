@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import {
-  assetHashesOf, creditOf, expandAssets, hashEditKey, planFromDocument, trackClassOf,
+  assetHashesOf, creditOf, expandAssets, hashEditKey, judgeLap, planFromDocument, trackClassOf,
   STATS_COUNTRY_UNKNOWN,
 } from './validate.js';
 
@@ -233,6 +233,44 @@ const MAP_CARD_NOT_YOURS = {
   status: 403,
 };
 
+/*
+ * THE LAP FLOOR'S CLEANUP, BY NAME, so it runs once per store and never
+ * again.
+ *
+ * The floor refuses a lap no track allows (judgeLap in src/validate.js), and
+ * the rows posted before it existed are taken out by the same function when
+ * the service starts: purgeImpossibleLaps below, in both stores. It deletes
+ * rows that cannot be put back, so it is a one time job with a name rather
+ * than something every start does. Run on every start it would also run
+ * after the next change to the floor's numbers, and delete whatever those
+ * caught before anybody had seen the list. The owner saw exactly which rows
+ * this one removes before it shipped. A later change that should clean up
+ * after itself gets a new name, and its own list shown first.
+ *
+ * There is no cached record to follow the rows out. A track's best time and
+ * its count are worked out from `times` on every read (summaryOf here, and
+ * listTracks and getTrack in PgStore), and a ghost is a column of the row it
+ * belongs to, so it goes with it.
+ */
+export const LAP_FLOOR_PURGE = 'lap-floor-2026-09-26';
+
+/* What the cleanup says about each row it took, and what the server logs. */
+function purgedRow(track, row, why) {
+  const posted = row.postedUtc instanceof Date ? row.postedUtc.toISOString() : String(row.postedUtc ?? '');
+  return {
+    trackId: track.id,
+    track: track.name,
+    id: row.id || null,
+    name: row.name,
+    lapMs: row.lapMs,
+    threeMs: row.threeMs == null ? null : row.threeMs,
+    postedUtc: posted,
+    floorMs: why.floorMs,
+    rule: why.rule,
+    error: why.error,
+  };
+}
+
 /* One 409, so the three publish paths cannot word it three ways. */
 const CONFLICT = {
   error: 'This track is already on the board. Publish a copy under a new name, or update it from the browser that first sent it.',
@@ -387,6 +425,8 @@ function emptyFile() {
     stats: { days: {}, dims: {} },
     maps: {},
     assets: {},
+    /* The one time jobs this store has run, by name. See LAP_FLOOR_PURGE. */
+    migrations: {},
   };
 }
 
@@ -558,9 +598,9 @@ class FileStore {
           stats.dims = {};
         }
       }
-      /* And for maps and the images they wear: a board.json from before
-       * maps were published is old, not corrupt. */
-      for (const key of ['maps', 'assets']) {
+      /* And for maps and the images they wear, and the one time jobs: a
+       * board.json from before any of them is old, not corrupt. */
+      for (const key of ['maps', 'assets', 'migrations']) {
         const held = this.data[key];
         if (!held || typeof held !== 'object' || Array.isArray(held)) {
           this.data[key] = {};
@@ -806,6 +846,13 @@ class FileStore {
     if (!track) {
       return { error: 'That track is not on the board.', status: 404 };
     }
+    /* The lap floor, judged here rather than in the route because this is
+     * where the track's document is held, and in the same lock as the write,
+     * so the lap is judged against the layout it is stored on. */
+    const refused = judgeLap({ lapMs, threeMs }, track.document);
+    if (refused) {
+      return { error: refused.error, status: 400 };
+    }
     let id = newTimeId();
     while (this.hasTimeId(id)) {
       id = newTimeId();
@@ -835,6 +882,56 @@ class FileStore {
       return null;
     }
     return { id: row.id, name: row.name, lapMs: row.lapMs, ghost: row.ghost || null };
+  }
+
+  /*
+   * THE LAP FLOOR'S ONE TIME CLEANUP. See LAP_FLOOR_PURGE for why it is
+   * named and run once.
+   *
+   * Every stored row is put to judgeLap against its own track's document, the
+   * same question addTime asks before a write, and a row is taken out only
+   * when that answers no. A row whose track is not here is left alone: it is
+   * not a lap on anything this can judge. A failed write puts memory back as
+   * it was, so the store and the file agree and the job is still unrun.
+   *
+   * Returns { ran, removed }, where `ran` is false when this store has done
+   * it before, and `removed` describes each row taken.
+   */
+  async purgeImpossibleLaps() {
+    return this.lock(async () => {
+      if (this.data.migrations[LAP_FLOOR_PURGE]) {
+        return { ran: false, removed: [] };
+      }
+      const removed = [];
+      const kept = {};
+      for (const [trackId, list] of Object.entries(this.data.times)) {
+        const track = this.data.tracks[trackId];
+        if (!track || !Array.isArray(list)) {
+          continue;
+        }
+        const survivors = list.filter((row) => {
+          const why = judgeLap(row, track.document);
+          if (why) {
+            removed.push(purgedRow(track, row, why));
+          }
+          return !why;
+        });
+        if (survivors.length !== list.length) {
+          kept[trackId] = survivors;
+        }
+      }
+      const before = { ...this.data.times };
+      Object.assign(this.data.times, kept);
+      this.data.migrations[LAP_FLOOR_PURGE] = { ranUtc: nowIso(), note: `${removed.length} removed` };
+      try {
+        await this.flush();
+      } catch (e) {
+        this.data.times = before;
+        delete this.data.migrations[LAP_FLOOR_PURGE];
+        throw e;
+      }
+      return { ran: true, removed };
+    });
   }
 
   /* ---------------- freestyle maps ---------------- */
@@ -1601,6 +1698,14 @@ class PgStore {
         await client.query('ROLLBACK');
         return { error: 'That track is not on the board.', status: 404 };
       }
+      /* The lap floor, against the row held FOR UPDATE, so a republish
+       * cannot change the layout between the judgement and the write. The
+       * file store's addTimeUnlocked asks the same question. */
+      const refused = judgeLap({ lapMs, threeMs }, found.rows[0].document);
+      if (refused) {
+        await client.query('ROLLBACK');
+        return { error: refused.error, status: 400 };
+      }
       const micro = trackClassOf(found.rows[0].document) === 'micro';
       const inserted = await client.query(
         `INSERT INTO times (track_id, public_id, name, lap_ms, three_ms, ghost, posted_utc)
@@ -1679,6 +1784,76 @@ class PgStore {
       [trackId, timeId],
     );
     return found.rowCount ? found.rows[0] : null;
+  }
+
+  /*
+   * The file store's purgeImpossibleLaps, in one transaction, and the file
+   * store's comment is the one that says what it judges and what it leaves.
+   *
+   * THE CLAIM COMES FIRST. The job's row in `migrations` is inserted before
+   * anything is read, and ON CONFLICT DO NOTHING means a database that has
+   * run it answers with no row and nothing else happens. Two instances
+   * starting together cannot both run it: the second one's insert waits on
+   * the first one's unique key and then finds it taken. Anything that fails
+   * rolls the claim back with the deletes, so the job is either done whole
+   * or still to do.
+   *
+   * Deleted by the row's own key, and only the keys this judged. A republish
+   * that clears a track's times in between takes those rows itself, and a
+   * lap posted in between has a key that is not on the list. RETURNING says
+   * which went, so what is logged is what was deleted.
+   */
+  async purgeImpossibleLaps() {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const claimed = await client.query(
+        `INSERT INTO migrations (name, ran_utc) VALUES ($1, NOW())
+         ON CONFLICT (name) DO NOTHING RETURNING name`,
+        [LAP_FLOOR_PURGE],
+      );
+      if (!claimed.rowCount) {
+        await client.query('ROLLBACK');
+        return { ran: false, removed: [] };
+      }
+      const tracks = await client.query(
+        'SELECT id, name, document FROM tracks WHERE id IN (SELECT DISTINCT track_id FROM times)',
+      );
+      const byId = new Map(tracks.rows.map((row) => [row.id, row]));
+      const times = await client.query(`
+        SELECT id AS "rowId", track_id AS "trackId", public_id AS id, name,
+               lap_ms AS "lapMs", three_ms AS "threeMs", posted_utc AS "postedUtc"
+        FROM times ORDER BY track_id, lap_ms, id
+      `);
+      const judged = new Map();
+      for (const row of times.rows) {
+        const track = byId.get(row.trackId);
+        const why = track ? judgeLap(row, track.document) : null;
+        if (why) {
+          judged.set(String(row.rowId), purgedRow(track, row, why));
+        }
+      }
+      let removed = [];
+      if (judged.size) {
+        const gone = await client.query(
+          'DELETE FROM times WHERE id = ANY($1::bigint[]) RETURNING id',
+          [[...judged.keys()]],
+        );
+        const went = new Set(gone.rows.map((row) => String(row.id)));
+        removed = [...judged].filter(([key]) => went.has(key)).map(([, row]) => row);
+      }
+      await client.query(
+        'UPDATE migrations SET note = $2 WHERE name = $1',
+        [LAP_FLOOR_PURGE, `${removed.length} removed`],
+      );
+      await client.query('COMMIT');
+      return { ran: true, removed };
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   /* ---------------- freestyle maps ---------------- */

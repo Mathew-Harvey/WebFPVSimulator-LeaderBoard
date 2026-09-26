@@ -67,6 +67,36 @@ const MIME = new Map([
 ]);
 
 const store = await openStore();
+
+/*
+ * THE LAP FLOOR'S ONE TIME CLEANUP, before the first request is answered.
+ *
+ * A lap no track allows is refused on the way in (judgeLap in validate.js,
+ * asked by addTime), and the ones stored before the floor existed are taken
+ * out here, once per store, by the same function. LAP_FLOOR_PURGE in
+ * store.js says why it is named and run once rather than on every start.
+ *
+ * Every row it takes is logged, one line each, because a deleted row cannot
+ * be put back and the log is the only place left that says what it was. A
+ * failure is logged and the board starts anyway: the job rolls back whole,
+ * so it is still to do on the next start, and a board that will not start
+ * over a cleanup is worse than one that has not cleaned up yet.
+ */
+try {
+  const purge = await store.purgeImpossibleLaps();
+  if (purge.ran) {
+    console.log(`Lap floor cleanup: removed ${purge.removed.length} stored lap(s) that no track allows.`);
+    for (const r of purge.removed) {
+      const three = r.threeMs == null ? '' : `, three lap total ${r.threeMs} ms`;
+      console.log(`  removed ${r.id || 'a time with no id'} on ${r.trackId} "${r.track}": ${r.name}, ${r.lapMs} ms${three}, posted ${r.postedUtc}, floor ${r.floorMs} ms (${r.rule}). ${r.error}`);
+    }
+  } else {
+    console.log('Lap floor cleanup: already done on this store.');
+  }
+} catch (e) {
+  console.error('Lap floor cleanup failed and changed nothing. It runs again on the next start.', e);
+}
+
 const bugsToken = String(process.env.BUGS_TOKEN || '');
 /*
  * A way past an edit key, and there are two things it opens.
@@ -1092,6 +1122,10 @@ async function handleApi(req, res, url) {
       send(res, 400, { error: 'That lap time is not usable.' });
       return;
     }
+    /* A usable number is not yet a lap anybody could fly. The floor needs the
+     * track's document, so addTime asks it, inside the same lock or
+     * transaction as the write, and a lap under it comes back as a 400 with
+     * a sentence like every other refusal here. See judgeLap in validate.js. */
     /* The ghost is optional and refused loudly when malformed rather than
      * silently dropped: the simulator proves its own encoding before it
      * sends, so a bad blob here is a bug someone needs to hear about. */

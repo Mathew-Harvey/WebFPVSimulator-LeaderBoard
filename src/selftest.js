@@ -23,13 +23,14 @@ import {
   creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
   inspectStatsEvent, normaliseCountry, statsDay,
   expandAssets, inspectMap, inspectMapPlan, inspectTags, MAX_CARD_BASE64_CHARS,
+  judgeLap, lapFloorOf, stationsOf, trackLengthOf, LAP_FLOOR_MS, LAP_TOP_SPEED,
 } from './validate.js';
 import { sourceKey } from './sponsors.js';
 import {
   adminEmails, checkPassword, mintSession, normaliseEmail, readSession,
 } from './admin.js';
 import {
-  mapRowToSummary, mapSummaryOf, openStore, rowToSummary, summaryOf,
+  mapRowToSummary, mapSummaryOf, openStore, rowToSummary, summaryOf, LAP_FLOOR_PURGE,
 } from './store.js';
 import { guessSimOrigin, landingOrigin, isLoopback } from '../public/origins.js';
 import { testStatsClient } from './stats-client-test.js';
@@ -172,6 +173,87 @@ function sampleDoc(id = 'trk-1a2b3c4d', extra = {}) {
     ],
     sequence: extra.sequence || [{ id: 'seq-1', elementId: 'el-1', apertureIndex: 0, entry: 1 }],
   };
+}
+
+/*
+ * TWO TRACKS FROM THE LIVE BOARD, whose stored laps are why the lap floor
+ * exists. The geometry is theirs as served on 26 September 2026, cut down to
+ * what the floor reads: where each station stands, and which way a marker
+ * is passed at what clearance.
+ *
+ * Flags and cones is a gate, six flags and five cones round a 60 by 40 field,
+ * 120.5 m station to station. It held a 0.20 s lap.
+ *
+ * Orbit (Anticlockwise) is two flags on ONE pole at (30, 24), turned a
+ * quarter apart, so its length is nought and only the absolute floor speaks
+ * for it. It held 10 and 15 ms laps, beside a 739 ms one by its author.
+ */
+function stationEl(id, type, x, y, dims = {}) {
+  return {
+    id, type, name: '', position: { x, y, z: 0 }, yaw: 0, pitch: 0, yawOverridden: false, dims,
+  };
+}
+
+function markerStep(id, elementId, passSide, clearance) {
+  return {
+    id, elementId, apertureIndex: null, entry: null, passSide, clearance, overridden: false,
+  };
+}
+
+function flagsDoc(id = 'trk-2397fd92') {
+  const flag = { height: 2.5, clearance: 1.5, poleRadius: 0.025 };
+  const cone = { height: 0.7112, clearance: 1, baseRadius: 0.1778 };
+  const doc = sampleDoc(id, {
+    name: 'Flags and cones',
+    elements: [
+      stationEl('el-1', 'gate', 40, 10, { levels: 1, sillH: 0, clearW: 1.524, clearH: 1.524, levelPitch: 1.557401 }),
+      stationEl('el-2', 'flag', 50, 10, flag),
+      stationEl('el-3', 'flag', 50, 20, flag),
+      stationEl('el-4', 'flag', 50, 30, flag),
+      stationEl('el-5', 'flag', 40, 30, flag),
+      stationEl('el-6', 'cone', 30, 29, cone),
+      stationEl('el-7', 'cone', 20, 30, cone),
+      stationEl('el-8', 'cone', 10, 30, cone),
+      stationEl('el-9', 'cone', 10, 20, cone),
+      stationEl('el-10', 'cone', 10, 10, { ...cone, clearance: 1.5 }),
+      stationEl('el-11', 'flag', 20, 8, flag),
+      stationEl('el-12', 'flag', 30, 10, { ...flag, clearance: 1 }),
+    ],
+    sequence: [
+      { id: 'sq-1', elementId: 'el-1', apertureIndex: 0, entry: 1, passSide: null, clearance: null, overridden: false },
+      markerStep('sq-2', 'el-2', 'right', 1.5),
+      markerStep('sq-3', 'el-3', 'left', 1.5),
+      markerStep('sq-4', 'el-4', 'right', 1.5),
+      markerStep('sq-5', 'el-5', 'right', 1.5),
+      markerStep('sq-6', 'el-6', 'left', 2),
+      markerStep('sq-7', 'el-7', 'right', 2),
+      markerStep('sq-8', 'el-8', 'right', 2),
+      markerStep('sq-9', 'el-9', 'left', 2),
+      markerStep('sq-10', 'el-10', 'right', 1.5),
+      markerStep('sq-11', 'el-11', 'right', 1.5),
+      markerStep('sq-12', 'el-12', 'left', 2),
+    ],
+  });
+  doc.schemaVersion = 2;
+  doc.branding = { logos: [] };
+  return doc;
+}
+
+function orbitDoc(id = 'trk-6254fc8b') {
+  const flag = { height: 2.5, clearance: 1.5, poleRadius: 0.025 };
+  const doc = sampleDoc(id, {
+    name: 'Orbit (Anticlockwise)',
+    elements: [
+      stationEl('el-1', 'startPads', 12, 24, { pads: 4, padSize: 0.6, spacing: 1.5 }),
+      stationEl('el-2', 'flag', 30, 24, flag),
+      { ...stationEl('el-3', 'flag', 30, 24, flag), yaw: -1.570796, yawOverridden: true },
+    ],
+    sequence: [
+      markerStep('sq-1', 'el-2', 'right', 1.5),
+      markerStep('sq-2', 'el-3', 'right', 1.5),
+    ],
+  });
+  return doc;
 }
 
 /*
@@ -2710,14 +2792,279 @@ async function testStats() {
   }
 }
 
+/*
+ * THE LAP FLOOR: the rule on its own, then the store that asks it before a
+ * write and the cleanup that asks it of every stored row, then a server that
+ * starts on a board file holding the live board's impossible laps.
+ */
+function testLapFloor() {
+  console.log('lap floor');
+  const flags = flagsDoc();
+  const orbit = orbitDoc();
+  check('flags and cones is its twelve stations, 120.5 m round, closing leg included',
+    stationsOf(flags).length === 12 && Math.abs(trackLengthOf(flags) - 120.496) < 0.001,
+    String(trackLengthOf(flags)));
+  const flagsFloor = lapFloorOf(flags);
+  check('its floor is that length at 50 m/s, rounded down to 2409 ms',
+    flagsFloor.rule === 'speed' && flagsFloor.ms === 2409, JSON.stringify(flagsFloor));
+  check('a real lap passes: 8.524 s, the fastest real lap on it',
+    judgeLap({ lapMs: 8524 }, flags) === null);
+  const fast = judgeLap({ lapMs: 200 }, flags);
+  check('the 0.20 s lap fails on speed, and the sentence gives the numbers',
+    Boolean(fast) && fast.rule === 'speed' && fast.floorMs === 2409
+    && /0\.200 s/.test(fast.error) && /120 m/.test(fast.error) && /2\.409 s/.test(fast.error),
+    fast && fast.error);
+  check('a lap exactly at the floor passes', judgeLap({ lapMs: 2409 }, flags) === null);
+  check('and a millisecond under it fails', Boolean(judgeLap({ lapMs: 2408 }, flags)));
+
+  check('orbit is two flags on one pole, so nought metres round',
+    stationsOf(orbit).length === 2 && trackLengthOf(orbit) === 0);
+  check('so its floor is the absolute one',
+    lapFloorOf(orbit).rule === 'absolute' && lapFloorOf(orbit).ms === LAP_FLOOR_MS);
+  const ten = judgeLap({ lapMs: 10 }, orbit);
+  check('the 10 ms lap fails on the absolute floor',
+    Boolean(ten) && ten.rule === 'absolute' && /0\.010 s/.test(ten.error), ten && ten.error);
+  check('so does the 15 ms one', Boolean(judgeLap({ lapMs: 15 }, orbit)));
+  check('the author\'s 739 ms orbit passes', judgeLap({ lapMs: 739 }, orbit) === null);
+  check('a lap exactly at the absolute floor passes', judgeLap({ lapMs: LAP_FLOOR_MS }, orbit) === null);
+  check('and a millisecond under it fails', Boolean(judgeLap({ lapMs: LAP_FLOOR_MS - 1 }, orbit)));
+  check('the two numbers are the ones argued for in validate.js',
+    LAP_FLOOR_MS === 250 && LAP_TOP_SPEED === 50);
+
+  /* What is a station, and what is left out because the game scores nothing
+   * there. A waypoint a hundred metres off would add 180 m that nobody has
+   * to fly; so would a flag at no clearance, or a type the simulator does
+   * not know and drops. */
+  const gateDims = { levels: 1, sillH: 0, clearW: 1.524, clearH: 1.524, levelPitch: 1.557401 };
+  const pinned = sampleDoc('trk-0a0b0c0d', {
+    elements: [
+      stationEl('el-1', 'gate', 0, 0, gateDims),
+      stationEl('el-2', 'waypoint', 100, 0, { height: 1, poleRadius: 0.02, clearance: 0 }),
+      stationEl('el-3', 'flag', 50, 0, { height: 2.5, clearance: 0, poleRadius: 0.025 }),
+      stationEl('el-4', 'somethingNew', 70, 0, {}),
+      stationEl('el-5', 'gate', 10, 0, gateDims),
+    ],
+    sequence: [
+      { id: 'sq-1', elementId: 'el-1', apertureIndex: 0, entry: 1 },
+      markerStep('sq-2', 'el-2', 'left', 0),
+      markerStep('sq-3', 'el-3', 'left', 0),
+      { id: 'sq-4', elementId: 'el-4' },
+      { id: 'sq-5', elementId: 'el-5', apertureIndex: 0, entry: -1 },
+    ],
+  });
+  check('a waypoint, a flag at no clearance and an unknown type are not stations',
+    stationsOf(pinned).length === 2 && trackLengthOf(pinned) === 20, String(trackLengthOf(pinned)));
+  const inherits = sampleDoc('trk-0a0b0c0e', {
+    elements: [
+      stationEl('el-1', 'cone', 0, 0, { height: 0.7, clearance: 1.5, baseRadius: 0.18 }),
+      stationEl('el-2', 'gate', 30, 0, gateDims),
+    ],
+    sequence: [
+      markerStep('sq-1', 'el-1', 'right', null),
+      { id: 'sq-2', elementId: 'el-2', apertureIndex: 0, entry: 1 },
+    ],
+  });
+  check('a marker with no clearance of its own takes its element\'s, as the builder does',
+    stationsOf(inherits).length === 2 && trackLengthOf(inherits) === 60 && lapFloorOf(inherits).ms === 1200);
+
+  const room = roomDoc();
+  check('a room\'s three lap total is held to three floors',
+    Boolean(judgeLap({ lapMs: 300, threeMs: 700 }, room))
+    && judgeLap({ lapMs: 300, threeMs: 750 }, room) === null
+    && judgeLap({ lapMs: 300, threeMs: null }, room) === null);
+  check('a value that is not a number is not judged, so a row the rule cannot read is never called impossible',
+    judgeLap({ lapMs: '10' }, orbit) === null && judgeLap({}, orbit) === null);
+}
+
+async function testLapFloorStore() {
+  console.log('lap floor, store');
+  const dir = await mkdtemp(join(tmpdir(), 'webfpv-board-floor-'));
+  process.env.BOARD_FILE = join(dir, 'board.json');
+  delete process.env.DATABASE_URL;
+  try {
+    const store = await openStore();
+    const flags = inspectDocument(flagsDoc());
+    const orbit = inspectDocument(orbitDoc());
+    const put = [
+      await store.publish({ inspected: flags, author: 'Le Star', editKey: '' }),
+      await store.publish({ inspected: orbit, author: 'Crapshack', editKey: '' }),
+    ];
+    check('both tracks publish', put.every((r) => !r.error), put.map((r) => r.error).join());
+    const refused = await store.addTime({ trackId: flags.id, name: 'Oliver', lapMs: 200 });
+    check('the store refuses a lap under the floor with a 400 and a sentence',
+      refused.status === 400 && /50 m\/s/.test(refused.error), JSON.stringify(refused));
+    check('and keeps nothing of it', (await store.getTrack(flags.id)).times.length === 0);
+    const edge = await store.addTime({ trackId: flags.id, name: 'Edge Case', lapMs: 2409 });
+    check('a lap at the floor is stored and ranked', !edge.error && edge.rank === 1, JSON.stringify(edge));
+
+    /* Rows stored before the floor existed, written straight into the store
+     * the way the live ones were. The ids are the live board's own. */
+    const row = (id, name, lapMs, postedUtc) => ({
+      id, name, lapMs, threeMs: null, ghost: null, postedUtc,
+    });
+    store.data.times[flags.id].push(
+      row('tm-71546e0e', 'Oliver', 200, '2026-08-27T03:41:18.329Z'),
+      row('tm-0000f1a9', 'Crapshack', 8614, '2026-08-25T14:14:59.305Z'),
+    );
+    store.data.times[orbit.id].push(
+      row('tm-e13b6869', 'AsylumFPV', 10, '2026-08-31T11:27:38.036Z'),
+      row('tm-53118b08', 'AsylumFPV', 15, '2026-08-31T11:27:05.194Z'),
+      row('tm-0000739a', 'Crapshack', 739, '2026-08-19T19:20:26.159Z'),
+    );
+    store.data.times['trk-deadbeef'] = [row('tm-0000dead', 'Nobody', 5, '2026-08-01T00:00:00.000Z')];
+    await store.flush();
+    check('seeded, the two records are the impossible ones',
+      (await store.getTrack(flags.id)).best.lapMs === 200 && (await store.getTrack(orbit.id)).best.lapMs === 10);
+
+    const purge = await store.purgeImpossibleLaps();
+    const gone = purge.removed.map((r) => r.id).sort().join();
+    check('the cleanup removes exactly the three impossible laps',
+      purge.ran === true && gone === 'tm-53118b08,tm-71546e0e,tm-e13b6869', gone);
+    check('and says of each which track, which rule and why',
+      purge.removed.every((r) => r.track && r.error && r.floorMs >= LAP_FLOOR_MS && ['speed', 'absolute'].includes(r.rule)));
+    const flagsAfter = await store.getTrack(flags.id);
+    const orbitAfter = await store.getTrack(orbit.id);
+    check('the real laps stay, and each record falls to the fastest real one',
+      flagsAfter.times.map((t) => t.lapMs).join() === '2409,8614'
+      && orbitAfter.times.map((t) => t.lapMs).join() === '739' && orbitAfter.best.lapMs === 739,
+      `${flagsAfter.times.map((t) => t.lapMs)} / ${orbitAfter.times.map((t) => t.lapMs)}`);
+    const card = (await store.listTracks()).find((t) => t.id === orbit.id);
+    check('the list card follows, because a record is read from the rows', card.best.lapMs === 739 && card.times === 1);
+    check('a row on no track is left alone', store.data.times['trk-deadbeef'].length === 1);
+    const again = await store.purgeImpossibleLaps();
+    check('run again, it does nothing: the job is done', again.ran === false && again.removed.length === 0);
+    const reopened = await openStore();
+    const held = reopened.data.migrations[LAP_FLOOR_PURGE];
+    check('a restart reads the job as done from the file, with its count',
+      (await reopened.purgeImpossibleLaps()).ran === false && Boolean(held) && held.note === '3 removed',
+      JSON.stringify(held));
+  } finally {
+    delete process.env.BOARD_FILE;
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/* A server of its own on a board file, with everything it prints kept. */
+function boardProcess(port, file) {
+  const child = spawn(process.execPath, [join(root, 'src', 'server.js')], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      BOARD_FILE: file,
+      DATABASE_URL: '',
+      SIM_ORIGIN: 'http://127.0.0.1:8000',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log = '';
+  child.stdout.on('data', (chunk) => { log += chunk; });
+  child.stderr.on('data', (chunk) => { log += chunk; });
+  const ready = new Promise((resolve, reject) => {
+    const started = Date.now();
+    const poll = setInterval(() => {
+      if (log.includes('WebFPV leaderboard')) {
+        clearInterval(poll);
+        resolve();
+      } else if (Date.now() - started > 8000 || child.exitCode != null) {
+        clearInterval(poll);
+        reject(new Error(`the board did not start: ${log}`));
+      }
+    }, 20);
+  });
+  const stop = () => new Promise((resolve) => {
+    if (child.exitCode != null) {
+      resolve();
+      return;
+    }
+    child.once('exit', () => resolve());
+    child.kill();
+  });
+  return {
+    child, ready, stop, log: () => log,
+  };
+}
+
+async function testLapFloorHttp() {
+  console.log('lap floor, http');
+  const dir = await mkdtemp(join(tmpdir(), 'webfpv-board-floor-http-'));
+  const file = join(dir, 'board.json');
+  process.env.BOARD_FILE = file;
+  delete process.env.DATABASE_URL;
+  let board = null;
+  try {
+    const seed = await openStore();
+    const flags = inspectDocument(flagsDoc());
+    const orbit = inspectDocument(orbitDoc());
+    await seed.publish({ inspected: flags, author: 'Le Star', editKey: '' });
+    await seed.publish({ inspected: orbit, author: 'Crapshack', editKey: '' });
+    const row = (id, name, lapMs, postedUtc) => ({
+      id, name, lapMs, threeMs: null, ghost: null, postedUtc,
+    });
+    seed.data.times[flags.id].push(
+      row('tm-71546e0e', 'Oliver', 200, '2026-08-27T03:41:18.329Z'),
+      row('tm-0000f1a9', 'Crapshack', 8614, '2026-08-25T14:14:59.305Z'),
+    );
+    seed.data.times[orbit.id].push(
+      row('tm-e13b6869', 'AsylumFPV', 10, '2026-08-31T11:27:38.036Z'),
+      row('tm-53118b08', 'AsylumFPV', 15, '2026-08-31T11:27:05.194Z'),
+      row('tm-0000739a', 'Crapshack', 739, '2026-08-19T19:20:26.159Z'),
+    );
+    await seed.flush();
+
+    board = boardProcess(3198, file);
+    await board.ready;
+    const log = board.log();
+    check('starting, the service logs the cleanup and one line per row it took',
+      log.includes('removed 3 stored lap(s)')
+      && ['tm-71546e0e', 'tm-e13b6869', 'tm-53118b08'].every((id) => log.includes(`removed ${id} on`)), log);
+    check('and names none of the real ones', !log.includes('tm-0000f1a9') && !log.includes('tm-0000739a'));
+    const base = 'http://127.0.0.1:3198';
+    const lapsOn = async (id) => (await (await fetch(`${base}/api/tracks/${id}`)).json()).times.map((t) => t.lapMs).join();
+    check('flags and cones keeps its real lap and loses the 0.20 s one', (await lapsOn(flags.id)) === '8614');
+    check('orbit keeps 739 ms and loses 10 and 15', (await lapsOn(orbit.id)) === '739');
+    const post = (id, lapMs) => fetch(`${base}/api/tracks/${id}/times`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Oliver', lapMs }),
+    });
+    const again = await post(flags.id, 200);
+    const againBody = await again.json();
+    check('posting the 0.20 s lap again is a 400 with a sentence',
+      again.status === 400 && /at least 2\.409 s/.test(againBody.error), `${again.status} ${againBody.error}`);
+    const tiny = await post(orbit.id, 10);
+    const tinyBody = await tiny.json();
+    check('so is the 10 ms one', tiny.status === 400 && /0\.250 s/.test(tinyBody.error), `${tiny.status} ${tinyBody.error}`);
+    const edge = await post(flags.id, 2409);
+    check('a lap at the floor is taken', edge.status === 201);
+    check('and the refusals left nothing behind', (await lapsOn(flags.id)) === '2409,8614');
+    await board.stop();
+
+    board = boardProcess(3198, file);
+    await board.ready;
+    check('a restart does not run the cleanup again',
+      board.log().includes('already done on this store') && !board.log().includes('stored lap(s)'), board.log());
+    check('and the board is as it was left', (await lapsOn(flags.id)) === '2409,8614' && (await lapsOn(orbit.id)) === '739');
+  } finally {
+    if (board) {
+      await board.stop();
+    }
+    delete process.env.BOARD_FILE;
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 await testPublicFiles();
 testOrigins();
 testAdmin();
 await testValidate();
+testLapFloor();
 await testStore();
+await testLapFloorStore();
 await testMaps();
 failed += await testStatsClient();
 await testStats();
 await testHttp();
+await testLapFloorHttp();
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
