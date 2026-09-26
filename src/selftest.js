@@ -682,6 +682,35 @@ async function testStore() {
     && relist[0].plan.path[0].x === 20);
   const doc = await store.getDocument(inspected.id);
   check('the document is still there', doc.document.id === inspected.id);
+  /*
+   * A RACEGOW ROOM IS RANKED ON THREE LAPS. A faster single lap does not
+   * lead it, and a run that never put three clean laps together is not on
+   * the sheet at all. The card's record is that same three lap total.
+   */
+  const roomInspected = inspectDocument(roomDoc('trk-3c4d5e6f'));
+  const roomPub = await store.publish({ inspected: roomInspected, author: 'Ada Rook', editKey: '' });
+  check('a RaceGOW room publishes', !roomPub.error, roomPub.error);
+  const lapOnly = await store.addTime({ trackId: roomInspected.id, name: 'Bo', lapMs: 4000 });
+  check('a single lap on a RaceGOW track is stored and not ranked',
+    lapOnly.rank == null && lapOnly.times === 0, `rank ${lapOnly.rank}, times ${lapOnly.times}`);
+  const threeSlow = await store.addTime({ trackId: roomInspected.id, name: 'Ada Rook', lapMs: 5000, threeMs: 16000 });
+  check('the first three lap time is rank 1', threeSlow.rank === 1 && threeSlow.times === 1);
+  const threeFast = await store.addTime({ trackId: roomInspected.id, name: 'Cy', lapMs: 4500, threeMs: 15000 });
+  check('a faster three lap total outranks a faster single lap', threeFast.rank === 1 && threeFast.times === 2);
+  const roomSheet = await store.getTrack(roomInspected.id);
+  check('the RaceGOW sheet lists only three lap times, fastest three first',
+    roomSheet.times.length === 2
+    && roomSheet.times[0].name === 'Cy' && roomSheet.times[0].threeMs === 15000
+    && roomSheet.times[0].lapMs === 4500
+    && roomSheet.times[1].name === 'Ada Rook',
+    roomSheet.times.map((t) => `${t.name}:${t.threeMs}`).join(','));
+  check('the RaceGOW record is the three lap total',
+    roomSheet.best && roomSheet.best.name === 'Cy' && roomSheet.best.lapMs === 15000,
+    roomSheet.best && `${roomSheet.best.name} ${roomSheet.best.lapMs}`);
+  const roomCard = (await store.listTracks()).find((t) => t.id === roomInspected.id);
+  check('the RaceGOW card shows the same three lap record',
+    roomCard && roomCard.times === 2 && roomCard.best && roomCard.best.lapMs === 15000 && roomCard.best.name === 'Cy',
+    roomCard && `${roomCard.times} ${roomCard.best && roomCard.best.lapMs}`);
   const filed = await store.addBug(inspectBugCreate({
     kind: 'feel',
     title: 'Yaw feels late on the field',
@@ -1817,11 +1846,12 @@ async function testHttp() {
 
     /* A time on it first, because the point of the route is that the times
      * go with the track and the point of the gate is that the publisher
-     * alone may not throw somebody else's away. */
+     * alone may not throw somebody else's away. A room lists the three lap
+     * total, so a lap on its own would not show. */
     await fetch('http://127.0.0.1:3199/api/tracks/trk-2b3c4d5e/times', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Bo Kite', lapMs: 4200 }),
+      body: JSON.stringify({ name: 'Bo Kite', lapMs: 4200, threeMs: 12600 }),
     });
     const beforeRemoval = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
     check('the room is on the board, with a time on it',

@@ -150,13 +150,67 @@ function livePlan(track) {
 }
 
 /*
- * Fastest first, and the earliest post wins a tie. Written out three times
- * in this file, and its SQL twins are the ORDER BY in PgStore.getTrack and
- * the comparison in addTime's rank: all five have to agree or a lap is
- * ranked one way in the list and another in the confirmation.
+ * THE TIME THE BOARD RANKS.
+ *
+ * A field track is a single lap, which is what MultiGP's time trial scores.
+ * A RaceGOW room is the fastest three consecutive laps. A room post that
+ * never put three clean laps together has no board time: the lap is stored,
+ * and it is not ranked, because a one lap number and a three lap number are
+ * not the same race.
+ *
+ * The file store, PgStore.listTracks, PgStore.getTrack and both addTime
+ * rank queries all use this rule. A lap ranked one way on the card and
+ * another in the confirmation is a board that cannot be read.
  */
-function byLap(a, b) {
-  return a.lapMs - b.lapMs || String(a.postedUtc).localeCompare(String(b.postedUtc));
+function isRoom(track) {
+  const doc = track && (track.document || null);
+  return trackClassOf(doc) === 'micro';
+}
+
+function scoredMs(track, row) {
+  if (!row) {
+    return null;
+  }
+  if (isRoom(track)) {
+    return row.threeMs == null ? null : row.threeMs;
+  }
+  return row.lapMs;
+}
+
+function byBoardTime(track) {
+  return (a, b) => {
+    const as = scoredMs(track, a);
+    const bs = scoredMs(track, b);
+    if (as == null && bs == null) {
+      return String(a.postedUtc).localeCompare(String(b.postedUtc));
+    }
+    if (as == null) {
+      return 1;
+    }
+    if (bs == null) {
+      return -1;
+    }
+    return as - bs || String(a.postedUtc).localeCompare(String(b.postedUtc));
+  };
+}
+
+/* The posts that are actually on the board, fastest first. */
+function boardTimes(track, times) {
+  return [...(times || [])].filter((row) => scoredMs(track, row) != null).sort(byBoardTime(track));
+}
+
+function bestOf(track, row) {
+  if (!row) {
+    return null;
+  }
+  const micro = isRoom(track);
+  return {
+    name: row.name,
+    /* The ranked time. On a room this is the three lap total, so a card,
+     * a link and the sheet all print one number. On the field it is the lap. */
+    lapMs: micro ? row.threeMs : row.lapMs,
+    threeMs: row.threeMs == null ? null : row.threeMs,
+  };
 }
 
 /* The answer to an upload whose key does not open the track it names. It
@@ -237,7 +291,7 @@ export function mapSummaryOf(map) {
 }
 
 export function summaryOf(track, times) {
-  const ranked = [...times].sort(byLap);
+  const ranked = boardTimes(track, times);
   const best = ranked[0] || null;
   return {
     id: track.id,
@@ -258,7 +312,7 @@ export function summaryOf(track, times) {
     publishedUtc: track.publishedUtc,
     updatedUtc: track.updatedUtc,
     times: ranked.length,
-    best: best ? { name: best.name, lapMs: best.lapMs } : null,
+    best: bestOf(track, best),
     /* Every track published before tags existed has none, and an absent
      * list must read as an empty one rather than as undefined: the page
      * filters on it and a card prints it. */
@@ -286,7 +340,7 @@ export function summaryOf(track, times) {
  * Highest score first, and the earliest post wins a tie, so a pilot who
  * matches a score does not take the place off the pilot who got there
  * first. Its SQL twins are the ORDER BY in PgStore.listRuns and the index
- * runs_map_score in schema.sql, and like byLap's five copies they all have
+ * runs_map_score in schema.sql, and like byBoardTime's copies they all have
  * to agree or a run is ranked one way in the list and another in the
  * confirmation the pilot is shown.
  */
@@ -538,9 +592,8 @@ class FileStore {
     if (!track) {
       return null;
     }
-    const times = [...(this.data.times[id] || [])]
-      .sort(byLap);
-    return { ...summaryOf(track, times), times: times.map(summaryTime) };
+    const all = this.data.times[id] || [];
+    return { ...summaryOf(track, all), times: boardTimes(track, all).map(summaryTime) };
   }
 
   async getDocument(id) {
@@ -764,10 +817,14 @@ class FileStore {
     list.push(row);
     this.data.times[trackId] = list;
     await this.flush();
-    const ranked = [...list].sort(byLap);
-    const rank = ranked.findIndex((t) => t === row) + 1;
+    const ranked = boardTimes(track, list);
+    const onBoard = scoredMs(track, row) != null;
     return {
-      id, name, lapMs, threeMs: row.threeMs, postedUtc: row.postedUtc, rank, times: ranked.length,
+      id, name, lapMs, threeMs: row.threeMs, postedUtc: row.postedUtc,
+      /* Null when the post is not a board time: a RaceGOW lap with no three
+       * lap total. The row is kept. It is not ranked. */
+      rank: onBoard ? ranked.findIndex((t) => t === row) + 1 : null,
+      times: ranked.length,
     };
   }
 
@@ -1265,13 +1322,34 @@ class PgStore {
              (gif IS NOT NULL) AS has_gif, (card IS NOT NULL) AS has_card
       FROM tracks ORDER BY updated_utc DESC
     `);
+    /* The card record. A room is ranked on three_ms and a lap with none is
+     * not on the board, which is the same cut boardTimes makes. */
     const bests = await this.pool.query(`
-      SELECT DISTINCT ON (track_id) track_id, name, lap_ms
-      FROM times
-      ORDER BY track_id, lap_ms ASC, posted_utc ASC
+      SELECT DISTINCT ON (t.track_id)
+        t.track_id, t.name,
+        CASE WHEN tr.document->>'trackClass' = 'micro' THEN t.three_ms ELSE t.lap_ms END AS "lapMs",
+        t.three_ms AS "threeMs"
+      FROM times t
+      JOIN tracks tr ON tr.id = t.track_id
+      WHERE COALESCE(tr.document->>'trackClass', '') <> 'micro'
+         OR t.three_ms IS NOT NULL
+      ORDER BY t.track_id,
+        CASE WHEN tr.document->>'trackClass' = 'micro' THEN t.three_ms ELSE t.lap_ms END ASC,
+        t.posted_utc ASC
     `);
-    const counts = await this.pool.query('SELECT track_id, COUNT(*)::int AS n FROM times GROUP BY track_id');
-    const bestBy = new Map(bests.rows.map((r) => [r.track_id, { name: r.name, lapMs: r.lap_ms }]));
+    const counts = await this.pool.query(`
+      SELECT t.track_id, COUNT(*)::int AS n
+      FROM times t
+      JOIN tracks tr ON tr.id = t.track_id
+      WHERE COALESCE(tr.document->>'trackClass', '') <> 'micro'
+         OR t.three_ms IS NOT NULL
+      GROUP BY t.track_id
+    `);
+    const bestBy = new Map(bests.rows.map((r) => [r.track_id, {
+      name: r.name,
+      lapMs: r.lapMs,
+      threeMs: r.threeMs == null ? null : r.threeMs,
+    }]));
     const nBy = new Map(counts.rows.map((r) => [r.track_id, r.n]));
     return tracks.rows.map((row) => ({
       ...rowToSummary(row),
@@ -1290,20 +1368,29 @@ class PgStore {
     if (!found.rowCount) {
       return null;
     }
+    const micro = trackClassOf(found.rows[0].document) === 'micro';
     const times = await this.pool.query(
       `SELECT public_id AS id, name, lap_ms AS "lapMs", three_ms AS "threeMs", posted_utc AS "postedUtc",
               (ghost IS NOT NULL) AS "hasGhost"
-       FROM times WHERE track_id = $1 ORDER BY lap_ms ASC, posted_utc ASC`,
-      [id],
+       FROM times WHERE track_id = $1
+         AND ($2::boolean = false OR three_ms IS NOT NULL)
+       ORDER BY CASE WHEN $2::boolean THEN three_ms ELSE lap_ms END ASC, posted_utc ASC`,
+      [id, micro],
     );
     /* `best` too. The file store's getTrack returns it through summaryOf
      * and the board's track sheet reads it, so leaving it out here made
-     * the same track render differently depending on the backend. */
+     * the same track render differently depending on the backend. On a
+     * room, lapMs here is the three lap total, matching bestOf. */
     const rows = times.rows;
+    const leader = rows[0] || null;
     return {
       ...rowToSummary(found.rows[0]),
       times: rows,
-      best: rows[0] ? { name: rows[0].name, lapMs: rows[0].lapMs } : null,
+      best: leader ? {
+        name: leader.name,
+        lapMs: micro ? leader.threeMs : leader.lapMs,
+        threeMs: leader.threeMs == null ? null : leader.threeMs,
+      } : null,
     };
   }
 
@@ -1509,11 +1596,12 @@ class PgStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const found = await client.query('SELECT id FROM tracks WHERE id = $1 FOR UPDATE', [trackId]);
+      const found = await client.query('SELECT id, document FROM tracks WHERE id = $1 FOR UPDATE', [trackId]);
       if (!found.rowCount) {
         await client.query('ROLLBACK');
         return { error: 'That track is not on the board.', status: 404 };
       }
+      const micro = trackClassOf(found.rows[0].document) === 'micro';
       const inserted = await client.query(
         `INSERT INTO times (track_id, public_id, name, lap_ms, three_ms, ghost, posted_utc)
          VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -1531,15 +1619,32 @@ class PgStore {
        * lap on the board reported rank 0. Comparing by id never leaves the
        * database and cannot lose precision.
        */
-      const rankRow = await client.query(
-        `WITH mine AS (SELECT lap_ms, posted_utc FROM times WHERE id = $2)
-         SELECT COUNT(*)::int AS n FROM times, mine
-         WHERE times.track_id = $1
-           AND (times.lap_ms < mine.lap_ms
-                OR (times.lap_ms = mine.lap_ms AND times.posted_utc <= mine.posted_utc))`,
-        [trackId, inserted.rows[0].id],
+      const postedThree = inserted.rows[0].threeMs != null;
+      const onBoard = !micro || postedThree;
+      let rank = null;
+      if (onBoard) {
+        const rankRow = await client.query(
+          micro
+            ? `WITH mine AS (SELECT three_ms, posted_utc FROM times WHERE id = $2)
+               SELECT COUNT(*)::int AS n FROM times, mine
+               WHERE times.track_id = $1 AND times.three_ms IS NOT NULL
+                 AND (times.three_ms < mine.three_ms
+                      OR (times.three_ms = mine.three_ms AND times.posted_utc <= mine.posted_utc))`
+            : `WITH mine AS (SELECT lap_ms, posted_utc FROM times WHERE id = $2)
+               SELECT COUNT(*)::int AS n FROM times, mine
+               WHERE times.track_id = $1
+                 AND (times.lap_ms < mine.lap_ms
+                      OR (times.lap_ms = mine.lap_ms AND times.posted_utc <= mine.posted_utc))`,
+          [trackId, inserted.rows[0].id],
+        );
+        rank = rankRow.rows[0].n;
+      }
+      const count = await client.query(
+        micro
+          ? 'SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1 AND three_ms IS NOT NULL'
+          : 'SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1',
+        [trackId],
       );
-      const count = await client.query('SELECT COUNT(*)::int AS n FROM times WHERE track_id = $1', [trackId]);
       await client.query('COMMIT');
       return {
         id: inserted.rows[0].publicId,
@@ -1547,7 +1652,7 @@ class PgStore {
         lapMs,
         threeMs: inserted.rows[0].threeMs == null ? null : inserted.rows[0].threeMs,
         postedUtc: inserted.rows[0].postedUtc,
-        rank: rankRow.rows[0].n,
+        rank,
         times: count.rows[0].n,
       };
     } catch (e) {

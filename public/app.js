@@ -588,10 +588,33 @@ function timesFor(id) {
   return state.timesById.get(id) || null;
 }
 
+/*
+ * The number the board ranks. A RaceGOW room is three consecutive laps.
+ * A field track is one lap. A summary best already stores that number in
+ * lapMs, and a time row stores the three lap total in threeMs, so a row
+ * that has threeMs uses it and everything else uses lapMs.
+ */
+function shownMs(track, row) {
+  if (!row) {
+    return null;
+  }
+  if (classOf(track) === 'micro') {
+    const three = Number(row.threeMs);
+    if (Number.isFinite(three)) {
+      return three;
+    }
+  }
+  const lap = Number(row.lapMs);
+  return Number.isFinite(lap) ? lap : null;
+}
+
 function bestMsOf(track) {
   const times = timesFor(track.id);
   if (times && times.length) {
-    return times[0].lapMs;
+    const ms = shownMs(track, times[0]);
+    if (ms != null) {
+      return ms;
+    }
   }
   return track.best ? track.best.lapMs : null;
 }
@@ -840,8 +863,8 @@ function cardFor(track, config) {
    * form. The single quiet line below says the same thing once. */
   const record = el('div', 'record');
   record.hidden = !track.best;
-  record.append(el('span', 'record-label', 'Record'));
-  record.append(timeNode(track.best ? track.best.lapMs : null, 'record-time'));
+  record.append(el('span', 'record-label', classOf(track) === 'micro' ? 'Three laps' : 'Record'));
+  record.append(timeNode(track.best ? shownMs(track, track.best) : null, 'record-time'));
   record.append(el('div', 'record-holder', track.best ? track.best.name : ''));
   head.append(record);
   body.append(head);
@@ -907,7 +930,7 @@ function paintPodium(card, times) {
     record.hidden = false;
   }
   if (clock) {
-    clock.replaceWith(timeNode(times[0].lapMs, 'record-time'));
+    clock.replaceWith(timeNode(shownMs(courseById(card.dataset.id), times[0]), 'record-time'));
   }
   /* One time is a record, not a podium, and naming the holder twice on
    * one card is how a leaderboard starts to read as a receipt. The holder
@@ -926,7 +949,7 @@ function paintPodium(card, times) {
     const li = el('li', `podium-row r${i + 1}`);
     li.append(el('span', 'rk', String(i + 1)));
     li.append(el('span', 'nm', row.name));
-    li.append(timeNode(row.lapMs, 'tm'));
+    li.append(timeNode(shownMs(courseById(card.dataset.id), row), 'tm'));
     if (row.hasGhost && row.id) {
       li.classList.add('has-chase');
       li.append(chaseLink(config, card.dataset.id, row));
@@ -1200,7 +1223,7 @@ function paintRail() {
     for (const row of feed) {
       const line = el('div', 'feed-row');
       line.append(el('span', 'nm', row.name));
-      line.append(timeNode(row.lapMs, `rail-time${row.best ? ' best' : ''}`));
+      line.append(timeNode(shownMs(row.course, row), `rail-time${row.best ? ' best' : ''}`));
       const on = el('a', 'on', row.course.name);
       on.href = courseHref(row.course.id);
       line.append(on);
@@ -2182,33 +2205,31 @@ function paintBoard(host, track, times) {
   host.textContent = '';
   const head = el('div', 'board-head');
   head.append(el('h3', null, times.length ? 'Every time posted' : 'The board is open'));
+  const room = classOf(track) === 'micro';
   if (times.length) {
-    head.append(el('span', 'count', plural(times.length, 'lap', 'laps')));
+    head.append(el('span', 'count', room
+      ? plural(times.length, 'three lap time', 'three lap times')
+      : plural(times.length, 'lap', 'laps')));
   }
   host.append(head);
 
   if (!times.length) {
-    host.append(el('p', 'none', `Nobody has posted a lap on ${track.name} yet. Fly it and the first time on the board is yours.`));
+    host.append(el('p', 'none', room
+      ? `Nobody has posted a three lap time on ${track.name} yet. RaceGOW scores three laps in a row, and the first one is yours.`
+      : `Nobody has posted a lap on ${track.name} yet. Fly it and the first time on the board is yours.`));
     return;
   }
 
-  const leader = times[0].lapMs;
-  const slowest = times[times.length - 1].lapMs || leader;
+  const leader = shownMs(track, times[0]);
+  const slowest = shownMs(track, times[times.length - 1]) || leader;
   /*
-   * THE THREE LAP COLUMN, and it only appears where it means something.
-   *
-   * RaceGOW is scored on three CONSECUTIVE laps where MultiGP's time trial
-   * is scored on one, so a room's sheet carries both numbers. A field's does
-   * not: no time on this board has ever been posted with one, and a column
-   * of dashes is worse than no column. Even on a room it waits until at
-   * least one pilot has actually put three clean laps together, because a
-   * run that crashed on lap two has nothing to print there.
+   * A room is ranked on three consecutive laps, which is the time in the
+   * first column. The best single lap of that same run sits beside it.
+   * A field is one lap and has no second number.
    */
-  const wantsThree = classOf(track) === 'micro'
-    && times.some((t) => Number.isFinite(t.threeMs));
-  const columns = [['rank', ''], ['nm', 'Pilot'], ['time', 'Lap']];
-  if (wantsThree) {
-    columns.push(['time three', 'Three laps']);
+  const columns = [['rank', ''], ['nm', 'Pilot'], ['time', room ? 'Three laps' : 'Lap']];
+  if (room) {
+    columns.push(['time three', 'Best lap']);
   }
   columns.push(['gap', 'Gap'], ['when', 'Posted'], ['chase', '']);
   const table = document.createElement('table');
@@ -2229,32 +2250,25 @@ function paintBoard(host, track, times) {
     name.append(el('span', null, row.name));
     const bar = el('div', 'gap-bar');
     const fill = el('span');
-    fill.style.width = `${Math.max(8, (row.lapMs / slowest) * 100)}%`;
+    const ms = shownMs(track, row);
+    fill.style.width = `${Math.max(8, ((ms || 0) / slowest) * 100)}%`;
     bar.append(fill);
     name.append(bar);
     tr.append(name);
 
     const time = el('td', 'time');
-    time.append(timeNode(row.lapMs, 'tm'));
+    time.append(timeNode(ms, 'tm'));
     tr.append(time);
 
-    if (wantsThree) {
-      const three = el('td', 'time three');
-      if (Number.isFinite(row.threeMs)) {
-        three.append(timeNode(row.threeMs, 'tm'));
-      } else {
-        /* A run that never put three clean laps together leaves the cell
-         * EMPTY, the way the gap column already leaves the leader's. A zero
-         * would be a time, and a dash would be a mark this page does not
-         * otherwise make. */
-        three.title = 'This run did not put three clean laps together.';
-      }
-      tr.append(three);
+    if (room) {
+      const lap = el('td', 'time three');
+      lap.append(timeNode(row.lapMs, 'tm'));
+      tr.append(lap);
     }
 
     const gap = el('td', 'gap');
-    if (i > 0) {
-      gap.append(timeNode(row.lapMs - leader, 'tm', '+'));
+    if (i > 0 && leader != null && ms != null) {
+      gap.append(timeNode(ms - leader, 'tm', '+'));
     }
     tr.append(gap);
 
@@ -2284,8 +2298,8 @@ function paintHero(host, track, times) {
   if (!best) {
     return;
   }
-  host.append(el('span', 'record-label', 'Track record'));
-  host.append(timeNode(best.lapMs, 'record-time'));
+  host.append(el('span', 'record-label', classOf(track) === 'micro' ? 'Three lap record' : 'Track record'));
+  host.append(timeNode(shownMs(track, best), 'record-time'));
   host.append(el('div', 'record-holder', best.name));
 }
 

@@ -1110,12 +1110,11 @@ async function handleApi(req, res, url) {
       name,
       lapMs,
       /*
-       * The RaceGOW metric, and it is OPTIONAL rather than validated into an
-       * error. A time posted from the sixty metre field has no such number
-       * and never will; a time posted from a room has one only when the run
-       * put three clean laps together. Absent, null and unusable all mean
-       * the same thing to the board, which is that there is nothing to
-       * print, and refusing the whole post over it would lose a good lap.
+       * The RaceGOW metric. A field post has no such number and never will.
+       * A room post has one only when the run put three clean laps together,
+       * and that total is the time the board ranks: a room lap without it is
+       * stored and not listed. Absent, null and unusable all mean the same
+       * thing, and refusing the whole post over it would lose the lap.
        */
       threeMs: normaliseThreeMs(body.threeMs, lapMs),
       ghost: ghost.ghost,
