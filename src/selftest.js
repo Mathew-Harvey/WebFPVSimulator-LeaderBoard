@@ -22,7 +22,7 @@ import {
   inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, layoutHash, normaliseLapMs, normaliseName,
   creditOf, normaliseThreeMs, planFromDocument, trackClassOf,
   inspectStatsEvent, normaliseCountry, statsDay,
-  expandAssets, inspectMap, inspectMapPlan, inspectTags,
+  expandAssets, inspectMap, inspectMapPlan, inspectTags, MAX_CARD_BASE64_CHARS,
 } from './validate.js';
 import { sourceKey } from './sponsors.js';
 import {
@@ -65,6 +65,30 @@ const GIF_64 = Buffer.concat([
   Buffer.from([64, 0, 64, 0, 0x00, 0x00, 0x00]),
   Buffer.from([0x3b]),
 ]);
+
+/*
+ * The smallest file the board will call a JPEG of a given size: the start
+ * of image, a JFIF header for the walk to step over (a canvas writes one
+ * first), one baseline frame header, and the end of image. No scan and so
+ * no picture, which is the point: the board reads the frame header and the
+ * last two bytes and decodes nothing. The real ones come out of the
+ * simulator's src/share/card.js.
+ */
+function jpegOf(width, height, { end = true } = {}) {
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    Buffer.from([0xff, 0xe0, 0x00, 0x10]),
+    Buffer.from('JFIF\0', 'latin1'),
+    Buffer.from([0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]),
+    Buffer.from([
+      0xff, 0xc0, 0x00, 0x11, 0x08,
+      height >> 8, height & 0xff, width >> 8, width & 0xff,
+      0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+    ]),
+    end ? Buffer.from([0xff, 0xd9]) : Buffer.alloc(0),
+  ]);
+}
+const CARD_JPEG = jpegOf(1200, 630);
 
 /* The token the http half starts its server with, so both halves of the
  * admin path are exercised: it opens the door, and an unset one has no
@@ -560,6 +584,16 @@ async function testStore() {
   const inspected = inspectDocument(sampleDoc());
   const first = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
   check('first publish returns an edit key', Boolean(first.editKey) && first.updated === false);
+  const restoredDoc = inspectDocument(sampleDoc('trk-aabbccdd'));
+  const held = 'ab'.repeat(16);
+  const restored = await store.publish({ inspected: restoredDoc, author: 'Ada Rook', editKey: held });
+  check('a new row keeps a key this browser already holds', restored.editKey === held && restored.updated === false);
+  const restoredAgain = await store.publish({ inspected: restoredDoc, author: 'Ada Rook', editKey: held });
+  check('that same key updates the restored row', restoredAgain.updated === true && !restoredAgain.editKey);
+  const odd = await store.publish({
+    inspected: inspectDocument(sampleDoc('trk-bbccddee')), author: 'Ada Rook', editKey: 'short',
+  });
+  check('a short key is not kept', odd.editKey && odd.editKey !== 'short');
   const clash = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
   check('second publish without the key is refused', clash.status === 409 && clash.conflict === true);
   const again = await store.publish({ inspected, author: 'Ada Rook', editKey: first.editKey });
@@ -930,7 +964,7 @@ async function testHttp() {
   try {
     await waitFor(child, 'WebFPV leaderboard');
     const health = await fetch('http://127.0.0.1:3199/api/health').then((r) => r.json());
-    check('health', health.ok === true && health.store === 'file');
+    check('health', health.ok === true && health.store === 'file' && health.keepsHeldKey === true);
     const created = await fetch('http://127.0.0.1:3199/api/tracks', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1627,6 +1661,155 @@ async function testHttp() {
     check('so the image is a 404 again', goneArt.status === 404);
 
     /* ---------------------------------------------------------------- */
+    /* The share card                                                     */
+    /* ---------------------------------------------------------------- */
+
+    console.log('\nthe share card');
+
+    /* A track of its own, so the relayout below clears nobody else's times. */
+    const cardPost = (path, payload, headers = {}) => fetch(`http://127.0.0.1:3199${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    });
+    const cardTrack = await cardPost('/api/tracks', { author: 'Ada Rook', document: sampleDoc('trk-c0ffee01') });
+    const cardKey = (await cardTrack.json()).editKey;
+    check('publish a field track for its card', cardTrack.status === 201 && Boolean(cardKey));
+
+    const noCard = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01/card');
+    check('a track with no share card is a 404, not an empty image', noCard.status === 404);
+
+    const cardUp = await cardPost('/api/tracks/trk-c0ffee01/card', { editKey: cardKey, card: CARD_JPEG.toString('base64') });
+    const cardUpBody = await cardUp.json();
+    check('the browser that published it can upload its share card, and a field track may have one',
+      cardUp.status === 200 && cardUpBody.bytes === CARD_JPEG.length && Boolean(cardUpBody.cardUtc),
+      JSON.stringify(cardUpBody));
+
+    const cardServed = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01/card');
+    const cardServedBytes = Buffer.from(await cardServed.arrayBuffer());
+    check('and it comes back as a JPEG, byte for byte',
+      cardServed.status === 200
+      && cardServed.headers.get('content-type') === 'image/jpeg'
+      && cardServedBytes.equals(CARD_JPEG));
+    check('kept briefly when the address carries no stamp',
+      (cardServed.headers.get('cache-control') || '') === 'public, max-age=300',
+      cardServed.headers.get('cache-control'));
+    const cardStamped = await fetch(`http://127.0.0.1:3199/api/tracks/trk-c0ffee01/card?v=${encodeURIComponent(cardUpBody.cardUtc)}`);
+    check('and kept for good when it does, because a new card is a new stamp',
+      /immutable/.test(cardStamped.headers.get('cache-control') || ''),
+      cardStamped.headers.get('cache-control'));
+    const cardHead = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01/card', { method: 'HEAD' });
+    check('a crawler that asks HEAD is told the type and the size and sent no bytes',
+      cardHead.status === 200
+      && cardHead.headers.get('content-type') === 'image/jpeg'
+      && cardHead.headers.get('content-length') === String(CARD_JPEG.length)
+      && (await cardHead.arrayBuffer()).byteLength === 0);
+
+    const cardListed = await fetch('http://127.0.0.1:3199/api/tracks').then((r) => r.json());
+    const cardRow = cardListed.tracks.find((t) => t.id === 'trk-c0ffee01');
+    check('the list says there is one, with its stamp, and does not carry it',
+      cardRow.hasCard === true && cardRow.cardUtc === cardUpBody.cardUtc
+      && !JSON.stringify(cardListed).includes(CARD_JPEG.toString('base64')));
+    const oneRead = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01').then((r) => r.json());
+    check('and so does the one track read, which is what the edge asks',
+      oneRead.hasCard === true && oneRead.cardUtc === cardUpBody.cardUtc);
+    check('a track without one says so', cardListed.tracks.find((t) => t.id === 'trk-1a2b3c4d').hasCard === false);
+
+    const cardStranger = await cardPost('/api/tracks/trk-c0ffee01/card', { editKey: 'not-the-key', card: CARD_JPEG.toString('base64') });
+    check('another browser cannot replace it', cardStranger.status === 403);
+    const cardAdmin = await cardPost('/api/tracks/trk-c0ffee01/card', { card: CARD_JPEG.toString('base64') }, {
+      authorization: `Bearer ${ADMIN_TOKEN}`,
+    });
+    check('the admin token can, for everything published before cards existed', cardAdmin.status === 200);
+    const cardNowhere = await cardPost('/api/tracks/trk-0000beef/card', { card: CARD_JPEG.toString('base64') }, {
+      authorization: `Bearer ${ADMIN_TOKEN}`,
+    });
+    check('a card for a track that is not here is a 404', cardNowhere.status === 404);
+    const cardBadId = await fetch('http://127.0.0.1:3199/api/tracks/constructor/card');
+    check('and an address that is not an id is a 400', cardBadId.status === 400);
+
+    const cardRefused = async (label, card) => {
+      const res = await cardPost('/api/tracks/trk-c0ffee01/card', { editKey: cardKey, card });
+      const said = await res.json();
+      check(label, res.status === 400 && typeof said.error === 'string', `${res.status} ${JSON.stringify(said)}`);
+      return said.error || '';
+    };
+    const sizeError = await cardRefused('a JPEG of any other size is refused', jpegOf(600, 315).toString('base64'));
+    check('and the refusal says what size it wants', /1200 by 630/.test(sizeError), sizeError);
+    await cardRefused('a file that is not a JPEG is refused', GIF_64.toString('base64'));
+    await cardRefused('a JPEG cut short in transit is refused', jpegOf(1200, 630, { end: false }).toString('base64'));
+    await cardRefused('an upload with no picture in it is refused', '');
+    await cardRefused('a picture over the weight limit is refused', 'A'.repeat(MAX_CARD_BASE64_CHARS + 4));
+    const cardHuge = await cardPost('/api/tracks/trk-c0ffee01/card', { editKey: cardKey, card: 'A'.repeat(MAX_CARD_BASE64_CHARS + 8_000) });
+    check('and a body past the read limit is a 413, not a dropped socket', cardHuge.status === 413);
+
+    /*
+     * A RENAME KEEPS IT AND A RELAYOUT DOES NOT, the animation's rule. The
+     * rename has to keep it because the simulator republishes a pilot's
+     * tracks in the background when their name changes, with no renderer.
+     */
+    const beforeRename = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01').then((r) => r.json());
+    const cardRenamed = await cardPost('/api/tracks', {
+      author: 'Ada Rook',
+      document: sampleDoc('trk-c0ffee01', { name: 'Ladder Loop, renamed' }),
+      editKey: cardKey,
+    });
+    check('a rename republishes the track', cardRenamed.status === 200);
+    const afterCardRename = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01').then((r) => r.json());
+    check('and the share card is still there, stamp and all',
+      afterCardRename.hasCard === true && afterCardRename.cardUtc === beforeRename.cardUtc,
+      `${beforeRename.cardUtc} then ${afterCardRename.cardUtc}`);
+    const movedCard = sampleDoc('trk-c0ffee01');
+    movedCard.elements[0].position = { x: 20, y: 8, z: 0 };
+    const cardMoved = await cardPost('/api/tracks', { author: 'Ada Rook', document: movedCard, editKey: cardKey });
+    check('moving the gate republishes and clears the times',
+      cardMoved.status === 200 && (await cardMoved.json()).timesCleared === true);
+    const afterCardMove = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01').then((r) => r.json());
+    check('and the share card goes with them, because it is a picture of the old layout',
+      afterCardMove.hasCard === false && afterCardMove.cardUtc === null);
+    const cardGone = await fetch('http://127.0.0.1:3199/api/tracks/trk-c0ffee01/card');
+    check('so the picture is a 404 again', cardGone.status === 404);
+
+    /* A map's card: the same route under /api/maps, opened by the map's own
+     * key, and gone on any republish. */
+    const cardMapMade = await cardPost('/api/maps', {
+      author: 'Ada Rook',
+      document: sampleMap('trk-5eed0020'),
+      plan: { marks: [{ t: 'building', k: 'structure', p: [[32, 53], [48, 53], [48, 67], [32, 67]] }] },
+    });
+    const cardMapKey = (await cardMapMade.json()).editKey;
+    check('publish a map for its card', cardMapMade.status === 201 && Boolean(cardMapKey));
+    const noMapCard = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0020/card');
+    check('a map with no share card is a 404', noMapCard.status === 404);
+    const mapCardUp = await cardPost('/api/maps/trk-5eed0020/card', { editKey: cardMapKey, card: CARD_JPEG.toString('base64') });
+    check('the browser that published a map can upload its share card', mapCardUp.status === 200);
+    const mapCardServed = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0020/card');
+    check('and it comes back as a JPEG, byte for byte',
+      mapCardServed.status === 200
+      && mapCardServed.headers.get('content-type') === 'image/jpeg'
+      && Buffer.from(await mapCardServed.arrayBuffer()).equals(CARD_JPEG));
+    const mapWithCard = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0020').then((r) => r.json());
+    check('the map says there is one', mapWithCard.hasCard === true && Boolean(mapWithCard.cardUtc));
+    const mapsListed = await fetch('http://127.0.0.1:3199/api/maps').then((r) => r.json());
+    check('and so does the map list, without the bytes',
+      mapsListed.maps.find((m) => m.id === 'trk-5eed0020').hasCard === true
+      && !JSON.stringify(mapsListed).includes(CARD_JPEG.toString('base64')));
+    const trackKeyOnMap = await cardPost('/api/maps/trk-5eed0020/card', { editKey: cardKey, card: CARD_JPEG.toString('base64') });
+    check('a track\'s key does not open a map\'s card', trackKeyOnMap.status === 403);
+    const mapOnTrackRoute = await fetch('http://127.0.0.1:3199/api/tracks/trk-5eed0020/card');
+    check('and a map\'s card is not under the tracks', mapOnTrackRoute.status === 404);
+    const cardMapAgain = await cardPost('/api/maps', {
+      author: 'Ada Rook',
+      document: sampleMap('trk-5eed0020'),
+      plan: { marks: [] },
+      editKey: cardMapKey,
+    });
+    check('the map republishes', cardMapAgain.status === 200);
+    const mapAfterAgain = await fetch('http://127.0.0.1:3199/api/maps/trk-5eed0020').then((r) => r.json());
+    check('and its card goes, because nothing republishes a map but a Publish that draws a new one',
+      mapAfterAgain.hasCard === false && mapAfterAgain.cardUtc === null);
+
+    /* ---------------------------------------------------------------- */
     /* Taking a track off the board                                       */
     /* ---------------------------------------------------------------- */
 
@@ -1838,6 +2021,24 @@ async function testHttp() {
     const notJson = await fetch(`${B}/api/stats/events`, { method: 'POST', body: 'not json at all' });
     check('and so is something that is not JSON', notJson.status === 400);
 
+    /* Support click events and their rate limit. */
+    const supportLanding = await post({ v: 1, kind: 'support_click', source: 'landing' });
+    check('a support click from landing returns 204', supportLanding.status === 204);
+    const supportBadSource = await post({ v: 1, kind: 'support_click', source: 'builder' });
+    check('a support click from unknown source returns 400', supportBadSource.status === 400);
+    const supportGpc = await fetch(`${B}/api/stats/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'sec-gpc': '1' },
+      body: JSON.stringify({ v: 1, kind: 'support_click', source: 'landing' }),
+    });
+    check('a support click with GPC returns 204', supportGpc.status === 204);
+    const support2 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a second support click returns 204', support2.status === 204);
+    const support3 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a third support click returns 204', support3.status === 204);
+    const support4 = await post({ v: 1, kind: 'support_click', source: 'sim' });
+    check('a fourth support click returns 204', support4.status === 204);
+
     const statsRes = await fetch(`${B}/api/stats`);
     const stats = await statsRes.json();
     check('the statistics read answers', statsRes.status === 200);
@@ -1852,6 +2053,13 @@ async function testHttp() {
       stats.today.sessions === 1 && stats.today.laps === 4 && stats.today.flightS === 61);
     check('the flying tab is counted as flying now', stats.live.flying === 1);
     check('the window is thirty days', stats.days.length === 30);
+
+    check('the stats have a support object', stats.support && typeof stats.support === 'object');
+    check('support has exactly sim and landing keys',
+      stats.support && Object.keys(stats.support).sort().join(',') === 'landing,sim');
+    check('support.sim counts two clicks under the limit', stats.support.sim === 2);
+    check('support.landing counts one click', stats.support.landing === 1);
+    check('and the GPC support click was not counted', stats.support.landing === 1);
 
     const sourceRow = (key) => stats.sources.find((r) => r.key === key) || {};
     check("a real sponsor keeps its own row", sourceRow('rotorriot').visits === 1);
@@ -2254,6 +2462,30 @@ async function testStats() {
     v: 1, kind: 'flush', tab: 'aaaa1111', craft: 'whoop65', laps: 2, flightS: 44, referrer: 'reddit.com', ref: 'hn',
   }).error);
 
+  check('a support click from sim is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'sim',
+  }).error);
+  check('a support click from landing is accepted', !ok({
+    v: 1, kind: 'support_click', source: 'landing',
+  }).error);
+  check('a support click from unknown source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: 'builder',
+  }).error));
+  check('a support click with no source is refused', Boolean(ok({
+    v: 1, kind: 'support_click',
+  }).error));
+  check('a support click with hostile source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: '<script>alert(1)</script>',
+  }).error));
+  check('a support click with array source is refused', Boolean(ok({
+    v: 1, kind: 'support_click', source: ['sim'],
+  }).error));
+  const supportEvent = ok({
+    v: 1, kind: 'support_click', source: 'sim', extra: 'ignored',
+  }).event;
+  check('nothing but the counted fields comes out of a support click',
+    Object.keys(supportEvent).sort().join(',') === 'kind,source');
+
   check('a version this board does not read is refused', Boolean(ok({ v: 2, kind: 'visit' }).error));
   check('an unknown kind is refused', Boolean(ok({ v: 1, kind: 'pageview' }).error));
   check('a visit from an unknown page is refused', Boolean(ok({
@@ -2437,6 +2669,29 @@ async function testStats() {
       && otherRef.sessions === 0 && otherRef.laps === 0);
     check('referrers array is bounded', withRef.referrers.length <= 50);
     check('refs array is bounded', withRef.refs.length <= 50);
+
+    /* Support clicks from both sources. */
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day, country: 'AU' });
+    await store.recordStats({
+      kind: 'support_click', source: 'landing',
+    }, { day, country: 'AU' });
+    const withSupport = await store.readStats({ days: 7, now });
+    check('support clicks from sim are counted', withSupport.support && withSupport.support.sim === 2);
+    check('support clicks from landing are counted', withSupport.support && withSupport.support.landing === 1);
+
+    /* A support-only day does not create a day row or move firstDay. */
+    const supportOnlyDay = '2026-09-10';
+    await store.recordStats({
+      kind: 'support_click', source: 'sim',
+    }, { day: supportOnlyDay, country: 'AU' });
+    const afterSupportOnly = await store.readStats({ days: 30, now });
+    check('a support-only day does not move firstDay', afterSupportOnly.firstDay === before);
+    check('and does not create a stats_days row', store.data.stats.days[supportOnlyDay] === undefined);
 
     /* The board's own tables, which are not counters and never were. */
     await store.publish({ inspected: inspectDocument(sampleDoc()), author: 'Ada Rook', editKey: 'k' });

@@ -38,10 +38,10 @@ import {
   adminCount, checkPassword, mintSession, normaliseEmail, readSession, PASSWORD_MAX,
 } from './admin.js';
 import {
-  inspectBugCreate, inspectBugPatch, inspectDocument, inspectGhost, inspectGif, inspectMap,
-  inspectMapPlan, inspectRun, inspectStatsEvent, inspectTags, normaliseCountry, normaliseLapMs,
-  normaliseName, normaliseThreeMs, statsDay,
-  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, MAX_GIF_BASE64_CHARS, RUN_MAPS, TAGS,
+  inspectBugCreate, inspectBugPatch, inspectCard, inspectDocument, inspectGhost, inspectGif,
+  inspectMap, inspectMapPlan, inspectRun, inspectStatsEvent, inspectTags, normaliseCountry,
+  normaliseLapMs, normaliseName, normaliseThreeMs, statsDay,
+  BUG_ID_RE, BUG_KINDS, BUG_STATUSES, MAX_CARD_BASE64_CHARS, MAX_GIF_BASE64_CHARS, RUN_MAPS, TAGS,
   TIME_ID_RE, TRACK_ID_RE,
 } from './validate.js';
 import { sourceKey, sponsorLink, sponsorList, sponsorName } from './sponsors.js';
@@ -175,6 +175,13 @@ let statsCache = { at: 0, body: '' };
  * script hammering the database, and nothing else.
  */
 const STATS_FLOOD_LIMIT = 600;
+
+/*
+ * Support link clicks get a tighter limit: three per ten minutes per
+ * address. Over the limit they are silently dropped (204, not counted) so a
+ * script cannot tell whether the limit exists.
+ */
+const SUPPORT_CLICK_LIMIT = 3;
 
 /*
  * GLOBAL PRIVACY CONTROL, and it is honoured on the server as well as in
@@ -449,7 +456,11 @@ async function handleApi(req, res, url) {
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
   if (req.method === 'GET' && path === '/api/health') {
-    send(res, 200, { ok: true, store: store.kind });
+    /* keepsHeldKey: a new row keeps a 32 hex edit key the caller already
+     * holds. Present so a restore can tell this deploy from the one that
+     * minted a fresh key for every new row and handed the old browser a
+     * track it could no longer update. */
+    send(res, 200, { ok: true, store: store.kind, keepsHeldKey: true });
     return;
   }
 
@@ -607,6 +618,17 @@ async function handleApi(req, res, url) {
     if (inspected.error) {
       send(res, 400, { error: inspected.error });
       return;
+    }
+    /* Support clicks have their own tighter limit: three per ten minutes.
+     * Over the limit they are silently dropped so a script cannot tell the
+     * limit exists. */
+    if (inspected.event.kind === 'support_click') {
+      if (bugFlooded(`support:${ip}`, SUPPORT_CLICK_LIMIT)) {
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
+      recordBugHit(`support:${ip}`);
     }
     /* Spent only on an event that was actually stored, the same rule the
      * bug form follows: eight malformed posts should not lock out a pilot
@@ -816,6 +838,103 @@ async function handleApi(req, res, url) {
       return;
     }
     send(res, 200, { id, gifUtc: done.gifUtc, bytes: checked.bytes.length });
+    return;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* The share card                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /*
+   * THE PICTURE A LINK SHOWS WHEN IT IS POSTED, one per track and one per
+   * map, at /api/tracks/:id/card and /api/maps/:id/card. One route for both,
+   * because nothing about the picture depends on what it is of: the same
+   * size, the same format, the same two ways in.
+   *
+   * Nobody's browser asks for this. The askers are Facebook's, X's,
+   * WhatsApp's, Discord's and Slack's crawlers, sent here by the og:image
+   * that the edge in front of webfpv.org writes into a shared page's head
+   * (edge/preview.js in the simulator). HEAD is answered as well as GET
+   * because a crawler may ask for the size before it asks for the bytes.
+   *
+   * The address a page names carries ?v=, the card's own stamp, so a
+   * replaced card is a new URL and the old one can be cached for good, the
+   * animation's arrangement. Without it the answer is short lived, because
+   * nothing then says when the bytes behind the address change.
+   */
+  const card = path.match(/^\/api\/(tracks|maps)\/([^/]+)\/card$/);
+  const cardOfMap = Boolean(card && card[1] === 'maps');
+  if ((req.method === 'GET' || req.method === 'HEAD') && card) {
+    const id = trackIdFrom(card[2]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    const found = cardOfMap ? await store.getMapCard(id) : await store.getCard(id);
+    if (!found) {
+      send(res, 404, { error: cardOfMap ? 'That map has no share card.' : 'That track has no share card.' });
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'image/jpeg',
+      'content-length': found.bytes.length,
+      'cache-control': url.searchParams.has('v')
+        ? 'public, max-age=31536000, immutable'
+        : 'public, max-age=300',
+    });
+    res.end(req.method === 'HEAD' ? undefined : found.bytes);
+    return;
+  }
+
+  /*
+   * Uploading one, on the animation's terms: a POST, the edit key of the
+   * browser that published, or BOARD_ADMIN_TOKEN for everything published
+   * before cards existed (scripts/boardcards.js in the simulator). The
+   * picture is checked before the store is asked about the key, because
+   * checking it costs nothing and the store's answer costs a write lock.
+   */
+  if (req.method === 'POST' && card) {
+    const id = trackIdFrom(card[2]);
+    if (!id) {
+      send(res, 400, { error: 'That address is not usable.' });
+      return;
+    }
+    let body;
+    try {
+      body = JSON.parse(await readBody(
+        req,
+        MAX_CARD_BASE64_CHARS + 4_000,
+        'That share card is too large for this board.',
+      ));
+    } catch (e) {
+      if (e.status) {
+        throw e;
+      }
+      send(res, 400, { error: 'That upload was not readable.' });
+      return;
+    }
+    const sent = body && typeof body === 'object' ? body : {};
+    const checked = inspectCard({ base64: sent.card });
+    if (checked.error) {
+      send(res, 400, { error: checked.error });
+      return;
+    }
+    const args = {
+      id,
+      bytes: checked.bytes,
+      editKey: typeof sent.editKey === 'string' ? sent.editKey : '',
+      admin: adminAuthorized(req),
+    };
+    const done = cardOfMap ? await store.setMapCard(args) : await store.setCard(args);
+    if (!done) {
+      send(res, 404, { error: cardOfMap ? 'That map is not on the board.' : 'That track is not on the board.' });
+      return;
+    }
+    if (done.error) {
+      send(res, done.status || 400, { error: done.error });
+      return;
+    }
+    send(res, 200, { id, cardUtc: done.cardUtc, bytes: checked.bytes.length });
     return;
   }
 

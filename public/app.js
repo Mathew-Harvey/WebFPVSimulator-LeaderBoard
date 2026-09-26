@@ -447,6 +447,53 @@ function mapHref(id) {
 }
 
 /*
+ * THE LINK COPY LINK HANDS OUT, which is a query and not the fragment the
+ * page routes on, and the difference is the whole of why a shared link
+ * shows the track.
+ *
+ * A fragment never leaves the browser. Facebook, X, WhatsApp, Discord,
+ * Slack and iMessage fetch https://webfpv.org/board/ without it, so every
+ * #track= link anybody ever posted was previewed as the board's front page.
+ * A query reaches the server, and the edge in front of webfpv.org
+ * (edge/preview.js in the simulator) writes that track's name and share
+ * card into the head for them. adoptSharedLink turns it back into the hash
+ * the moment a person arrives, so nothing else on this page changes.
+ */
+function courseShareHref(config, id) {
+  return `${config.boardOrigin}/?track=${encodeURIComponent(id)}`;
+}
+
+function mapShareHref(config, id) {
+  return `${config.boardOrigin}/?map=${encodeURIComponent(id)}`;
+}
+
+/*
+ * ?track=id and ?map=id become #track=id and #map=id, in place, before
+ * anything routes. The query is taken out rather than left beside the
+ * hash: this page moves between tracks by changing the hash alone, so a
+ * query left behind would soon be naming one track in an address that
+ * shows another, and a link copied out of that address bar would show a
+ * crawler the wrong one. Every other parameter stays where it was.
+ */
+function adoptSharedLink() {
+  let url;
+  try {
+    url = new URL(window.location.href);
+  } catch (e) {
+    return;
+  }
+  const track = url.searchParams.get('track');
+  const map = track ? '' : url.searchParams.get('map');
+  if (!track && !map) {
+    return;
+  }
+  url.searchParams.delete('track');
+  url.searchParams.delete('map');
+  url.hash = track ? courseHref(track) : mapHref(map);
+  history.replaceState(null, '', url.href);
+}
+
+/*
  * The credits roll lives on the simulator at #credits. This board used to
  * paint a second copy, and the two drifted. One page, not two.
  *
@@ -2306,7 +2353,7 @@ async function paintSheet(track) {
   /* The builder is the simulator's tab, not a third one: the simulator
    * navigates to the builder in place, so they share the name. */
   remix.target = SIM_WINDOW;
-  actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${courseHref(track.id)}`));
+  actions.append(fly, remix, copyButton(courseShareHref(state.config, track.id)));
 
   paintSheetAdmin(track);
 
@@ -2367,7 +2414,7 @@ function paintMapSheet(map) {
   const remix = el('a', 'text', 'Remix in the builder');
   remix.href = mapRemixHref(state.config, map.id);
   remix.target = SIM_WINDOW;
-  actions.append(fly, remix, copyButton(`${state.config.boardOrigin}/${mapHref(map.id)}`));
+  actions.append(fly, remix, copyButton(mapShareHref(state.config, map.id)));
 
   paintMapSheetAdmin(map);
 
@@ -2935,6 +2982,8 @@ async function start() {
    * stacking up another one. window.name survives navigation within this
    * origin, so the bugs page and a track hash keep the claim. */
   window.name = BOARD_WINDOW;
+  /* First, because everything after it reads the hash. */
+  adoptSharedLink();
   window.addEventListener('hashchange', route);
   if (location.hash === '#credits') {
     route();
