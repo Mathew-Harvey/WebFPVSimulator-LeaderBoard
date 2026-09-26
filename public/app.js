@@ -55,7 +55,7 @@ import {
  * src/config.js. Not a simulator-tab link: Patreon is outside the product,
  * so it must not take the webfpv-sim name.
  */
-const PATREON_URL = 'https://www.patreon.com/c/webfpv';
+const PATREON_URL = 'https://www.patreon.com/cw/webfpv';
 
 const PATREON_NOTE = 'Support WebFPV on Patreon. Keep the lights on, $5. Hosting + runway, $12. Build the sim, $25. USD, plus GST on join.';
 
