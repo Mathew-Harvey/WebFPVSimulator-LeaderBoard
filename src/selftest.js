@@ -584,6 +584,16 @@ async function testStore() {
   const inspected = inspectDocument(sampleDoc());
   const first = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
   check('first publish returns an edit key', Boolean(first.editKey) && first.updated === false);
+  const restoredDoc = inspectDocument(sampleDoc('trk-aabbccdd'));
+  const held = 'ab'.repeat(16);
+  const restored = await store.publish({ inspected: restoredDoc, author: 'Ada Rook', editKey: held });
+  check('a new row keeps a key this browser already holds', restored.editKey === held && restored.updated === false);
+  const restoredAgain = await store.publish({ inspected: restoredDoc, author: 'Ada Rook', editKey: held });
+  check('that same key updates the restored row', restoredAgain.updated === true && !restoredAgain.editKey);
+  const odd = await store.publish({
+    inspected: inspectDocument(sampleDoc('trk-bbccddee')), author: 'Ada Rook', editKey: 'short',
+  });
+  check('a short key is not kept', odd.editKey && odd.editKey !== 'short');
   const clash = await store.publish({ inspected, author: 'Ada Rook', editKey: '' });
   check('second publish without the key is refused', clash.status === 409 && clash.conflict === true);
   const again = await store.publish({ inspected, author: 'Ada Rook', editKey: first.editKey });
@@ -954,7 +964,7 @@ async function testHttp() {
   try {
     await waitFor(child, 'WebFPV leaderboard');
     const health = await fetch('http://127.0.0.1:3199/api/health').then((r) => r.json());
-    check('health', health.ok === true && health.store === 'file');
+    check('health', health.ok === true && health.store === 'file' && health.keepsHeldKey === true);
     const created = await fetch('http://127.0.0.1:3199/api/tracks', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

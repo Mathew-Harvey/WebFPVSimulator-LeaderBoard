@@ -49,6 +49,21 @@ function newTimeId() {
 }
 
 /*
+ * The key stored for a row that does not exist yet.
+ *
+ * A first publish has always been given a key minted here, and that stays
+ * the answer when the caller has none, or has something that is not one of
+ * these keys. The other case is a browser that already holds the key,
+ * because it published this id and the row was removed afterwards. The key
+ * this board mints is 32 hex characters. Keeping that one means the same
+ * browser still owns the track. A short or odd string is not kept: a caller
+ * must not be able to choose a key anybody could guess.
+ */
+function keyForNewRow(editKey) {
+  return /^[a-f0-9]{32}$/.test(editKey) ? editKey : randomBytes(16).toString('hex');
+}
+
+/*
  * A time row as the API shows it in a list: the ghost blob itself never
  * travels with a track, only the fact that one exists, or a track with
  * forty recorded laps would weigh megabytes on every open of its sheet.
@@ -560,7 +575,7 @@ class FileStore {
         }
       }
     } else {
-      key = randomBytes(16).toString('hex');
+      key = keyForNewRow(editKey);
     }
     const publishedUtc = existing ? existing.publishedUtc : nowIso();
     /* THE ANIMATION SURVIVES A RENAME AND NOT A RELAYOUT.
@@ -1339,7 +1354,7 @@ class PgStore {
           ],
         );
       } else {
-        key = randomBytes(16).toString('hex');
+        key = keyForNewRow(editKey);
         await client.query(
           `INSERT INTO tracks (
             id, name, author, document, plan, layout_hash, edit_key_hash,

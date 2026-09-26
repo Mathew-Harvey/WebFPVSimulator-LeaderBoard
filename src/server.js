@@ -449,7 +449,11 @@ async function handleApi(req, res, url) {
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
   if (req.method === 'GET' && path === '/api/health') {
-    send(res, 200, { ok: true, store: store.kind });
+    /* keepsHeldKey: a new row keeps a 32 hex edit key the caller already
+     * holds. Present so a restore can tell this deploy from the one that
+     * minted a fresh key for every new row and handed the old browser a
+     * track it could no longer update. */
+    send(res, 200, { ok: true, store: store.kind, keepsHeldKey: true });
     return;
   }
 
